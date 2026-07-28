@@ -16,9 +16,16 @@ def estimate_tokens(text: str) -> int:
     return ceil(len(text.encode("utf-8")) / 3)
 
 
-def prompt(content: str, symbols: list[Symbol]) -> str:
+def prompt(content: str, symbols: list[Symbol], language: str = "English") -> str:
     names = [{"symbol": item.name, "kind": item.kind, "arguments": item.args} for item in symbols]
-    return "Return only a JSON object mapping each requested symbol to a concise factual documentation description. Do not include Markdown or code fences. Requested symbols: " + json.dumps(names) + "\n\nSOURCE:\n" + content
+    return (
+        "Return only a JSON object mapping each requested symbol to a concise factual "
+        "documentation description. Do not include Markdown or code fences. Write all "
+        f"documentation text in {json.dumps(language, ensure_ascii=False)}. Requested symbols: "
+        + json.dumps(names)
+        + "\n\nSOURCE:\n"
+        + content
+    )
 
 
 def _post(url: str, payload: dict, headers: dict[str, str], timeout: int) -> dict:
@@ -36,7 +43,7 @@ def _post(url: str, payload: dict, headers: dict[str, str], timeout: int) -> dic
 
 
 def documentation_for(content: str, symbols: list[Symbol], settings: Settings) -> dict[str, str]:
-    body = prompt(content, symbols)
+    body = prompt(content, symbols, settings.language)
     tokens = estimate_tokens(body)
     if tokens > settings.max_input_tokens or tokens + settings.max_output_tokens > settings.context_window_tokens:
         raise DocGubError("AI input exceeds configured token limits; narrow the scope or increase limits.")
