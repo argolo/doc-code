@@ -2,9 +2,9 @@
 provider = "ollama"
 models = ["gemma4:e4b", "qwen2.5-coder:14b"]
 endpoint = "http://localhost:11434/api/generate"
-max_input_tokens = 12000
+max_input_tokens = 8000
 context_window_tokens = 32768
-max_output_tokens = 1200
+max_output_tokens = 800
 temperature = 0.1
 timeout_seconds = 120
 
