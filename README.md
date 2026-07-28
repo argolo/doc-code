@@ -2,7 +2,7 @@
 
 `doc-gub` gera documentação para arquivos Python, JavaScript e TypeScript usando OpenAI, Gemini ou Ollama.
 
-Por padrão, ele apenas mostra um diff. Para gravar, revise a prévia e execute:
+Por padrão, ele mostra um resumo compacto da geração, sem despejar código no terminal. Para gravar, execute:
 
 ```shell
 doc-gub --output apply
@@ -17,8 +17,10 @@ doc-gub                         # mudanças Git (staging tem prioridade)
 doc-gub src/                    # arquivo ou diretório específico
 doc-gub --selection repository  # todos os arquivos elegíveis
 doc-gub --coverage all --format numpy
+doc-gub --language Portuguese
+doc-gub --check                 # falha no CI se houver símbolos sem documentação
 doc-gub config init
 doc-gub config show
 ```
 
-A configuração segue esta precedência: flags, `--config`, variáveis `DOC_GUB_*`, `.doc-gub.toml`, configuração do usuário e valores padrão. Credenciais usam `OPENAI_API_KEY` ou `GEMINI_API_KEY`; o Ollama não requer credencial.
+A configuração segue esta precedência: flags, `--config`, variáveis `DOC_GUB_*`, `.doc-gub.toml`, configuração do usuário e valores padrão. Defina `language = "Portuguese"` em `[documentation]`, use `DOC_GUB_LANGUAGE` ou passe `--language Portuguese` para controlar o idioma gerado. Credenciais usam `OPENAI_API_KEY` ou `GEMINI_API_KEY`; o Ollama não requer credencial.
