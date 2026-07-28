@@ -24,6 +24,7 @@ class Settings:
     selection: str = "changes"
     coverage: str = "missing"
     existing_docs: str = "preserve"
+    language: str = "English"
     python_format: str = "google"
     javascript_format: str = "jsdoc"
     output: str = "preview"
@@ -54,6 +55,7 @@ timeout_seconds = 60
 selection = "changes"
 coverage = "missing"
 existing_docs = "preserve"
+language = "English"
 python_format = "google"
 javascript_format = "jsdoc"
 output = "preview"
@@ -81,7 +83,7 @@ def _env() -> dict[str, Any]:
     names = (
         "provider", "model", "endpoint", "max_input_tokens", "context_window_tokens",
         "max_output_tokens", "temperature", "timeout_seconds", "selection", "coverage",
-        "existing_docs", "python_format", "javascript_format", "output", "confirm",
+        "existing_docs", "language", "python_format", "javascript_format", "output", "confirm",
         "max_files_per_request", "max_file_bytes",
     )
     return {
@@ -108,6 +110,9 @@ def load(repo_root: Path, config_path: Path | None = None, **overrides: Any) -> 
         if values[name] <= 0:
             raise DocGubError(f"`{name}` must be positive.")
     values["temperature"] = float(values["temperature"])
+    if not isinstance(values["language"], str) or not values["language"].strip():
+        raise DocGubError("`language` must be a non-empty string.")
+    values["language"] = values["language"].strip()
     if values["provider"] not in {"openai", "gemini", "ollama"}:
         raise DocGubError("Provider must be openai, gemini, or ollama.")
     allowed = {"selection": {"changes", "repository"}, "coverage": {"missing", "minimal", "all"}, "existing_docs": {"preserve", "replace"}, "python_format": {"google", "numpy", "sphinx"}, "output": {"preview", "apply"}}
