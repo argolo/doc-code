@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from time import perf_counter
+from threading import Event, Thread
+from time import perf_counter, sleep
 from typing import Optional
 
 import typer
@@ -23,6 +25,38 @@ config_app = typer.Typer(help="Create and inspect doc-gub configuration.", no_ar
 MAX_AI_ATTEMPTS = 3
 
 
+@contextmanager
+def _loading(message: str):
+    """Show an interactive spinner or one stable log line while the AI responds."""
+    typer.echo(err=True)
+    if not sys.stderr.isatty():
+        typer.secho(message, fg=typer.colors.CYAN, err=True)
+        yield
+        return
+
+    stop = Event()
+
+    def spin() -> None:
+        for frame in "|/-\\":
+            if stop.is_set():
+                break
+            typer.secho(f"\r{message} {frame}", fg=typer.colors.CYAN, nl=False, err=True)
+            sleep(0.12)
+
+    def loop() -> None:
+        while not stop.is_set():
+            spin()
+
+    worker = Thread(target=loop, daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        worker.join(timeout=1)
+        typer.echo("\r" + " " * (len(message) + 2) + "\r", nl=False, err=True)
+
+
 def _show(item: PreparedFile, model: str, elapsed: float) -> None:
     relative = item.path.as_posix()
     typer.echo()
@@ -30,7 +64,7 @@ def _show(item: PreparedFile, model: str, elapsed: float) -> None:
     typer.echo(f"Symbols: {len(item.symbols)} | changed: {len(item.changed)} | ignored: {len(item.ignored)}")
     typer.echo(f"Model: {model} | Generated in {elapsed:.2f}s")
     if item.diff:
-        typer.echo(item.diff, nl=False)
+        typer.secho("Status: documentation changes generated.", fg=typer.colors.GREEN)
     else:
         typer.secho("No documentation changes needed.", fg=typer.colors.BRIGHT_BLACK)
 
@@ -43,6 +77,9 @@ def doc_gub(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip global confirmation when applying."),
     coverage: Optional[str] = typer.Option(None, "--coverage", help="missing, minimal, or all."),
     existing_docs: Optional[str] = typer.Option(None, "--existing-docs", help="preserve or replace."),
+    language: Optional[str] = typer.Option(
+        None, "--language", help="Language used for generated documentation."
+    ),
     selection: Optional[str] = typer.Option(None, "--selection", help="changes or repository."),
     python_format: Optional[str] = typer.Option(None, "--format", help="google, numpy, or sphinx for Python."),
     provider: Optional[str] = typer.Option(None, "--provider", help="openai, gemini, or ollama."),
@@ -55,7 +92,7 @@ def doc_gub(
     """Preview or safely apply AI-generated docs to Python, JavaScript and TypeScript."""
     try:
         repo = GitRepo()
-        settings = load(repo.root, config, output="preview" if dry_run else output, coverage=coverage, existing_docs=existing_docs, selection=selection, python_format=python_format, provider=provider, model=model, timeout_seconds=timeout_seconds, max_input_tokens=max_input_tokens, context_window_tokens=context_window_tokens)
+        settings = load(repo.root, config, output="preview" if dry_run else output, coverage=coverage, existing_docs=existing_docs, language=language, selection=selection, python_format=python_format, provider=provider, model=model, timeout_seconds=timeout_seconds, max_input_tokens=max_input_tokens, context_window_tokens=context_window_tokens)
         prepared: list[PreparedFile] = []
         for relative in resolve(repo, path, settings):
             file_path = repo.root / relative
@@ -69,13 +106,31 @@ def doc_gub(
                 continue
             started = perf_counter()
             last_error: Exception | None = None
-            for attempt in range(MAX_AI_ATTEMPTS):
-                candidate = settings.model_candidates[min(attempt, len(settings.model_candidates) - 1)]
+            for attempt in range(1, MAX_AI_ATTEMPTS + 1):
+                candidate = settings.model_candidates[
+                    min(attempt - 1, len(settings.model_candidates) - 1)
+                ]
                 try:
-                    descriptions = documentation_for(content, targets, replace(settings, model=candidate, models=()))
+                    with _loading(
+                        f"Generating documentation for [{relative}] with model [{candidate}] "
+                        f"({attempt}/{MAX_AI_ATTEMPTS})..."
+                    ):
+                        descriptions = documentation_for(
+                            content, targets, replace(settings, model=candidate, models=())
+                        )
                     break
                 except (AITimeoutError, InvalidAIResponseError) as exc:
                     last_error = exc
+                    if attempt < MAX_AI_ATTEMPTS:
+                        next_model = settings.model_candidates[
+                            min(attempt, len(settings.model_candidates) - 1)
+                        ]
+                        reason = "AI request timed out" if isinstance(exc, AITimeoutError) else "Invalid AI response"
+                        typer.secho(
+                            f"{reason} with model [{candidate}]. Retrying with model "
+                            f"[{next_model}] ({attempt + 1}/{MAX_AI_ATTEMPTS})...",
+                            fg=typer.colors.YELLOW,
+                        )
             else:
                 raise DocGubError(f"{relative}: generation failed after {MAX_AI_ATTEMPTS} attempts: {last_error}")
             item = prepare(file_path, symbols, descriptions, settings)
