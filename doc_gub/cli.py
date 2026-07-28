@@ -135,7 +135,16 @@ def doc_gub(
             if missing:
                 raise typer.Exit(1)
             return
-        prepared: list[PreparedFile] = []
+        if settings.output == "apply" and settings.confirm and not yes:
+            if not sys.stdin.isatty():
+                raise DocGubError("Confirmation requires an interactive terminal; use --yes for automation.")
+            if not typer.confirm(
+                f"Apply documentation as each of {len(files)} file(s) completes?", default=False
+            ):
+                typer.secho("Cancelled.", fg=typer.colors.YELLOW)
+                return
+
+        completed: list[str] = []
         skipped: list[str] = []
         for relative in files:
             file_path = repo.root / relative
@@ -145,7 +154,6 @@ def doc_gub(
             if not targets:
                 item = prepare(file_path, symbols, {}, settings)
                 _show(item, "not used", 0)
-                prepared.append(item)
                 continue
             started = perf_counter()
             last_error: Exception | None = None
@@ -184,21 +192,21 @@ def doc_gub(
                 _show_skipped(relative, str(exc))
                 continue
             _show(item, candidate, perf_counter() - started)
-            prepared.append(item)
-        changed = [item for item in prepared if item.diff]
-        if settings.output == "preview" or not changed:
+            if settings.output == "apply" and item.diff:
+                try:
+                    apply(item)
+                except DocGubError as exc:
+                    skipped.append(relative)
+                    _show_skipped(relative, str(exc))
+                    continue
+                completed.append(relative)
+                typer.secho(f"Applied documentation: {relative}", fg=typer.colors.GREEN)
+
+        if settings.output == "preview":
             if skipped:
                 typer.secho(f"Skipped files: {len(skipped)}", fg=typer.colors.YELLOW, bold=True)
             return
-        if settings.confirm and not yes:
-            if not sys.stdin.isatty():
-                raise DocGubError("Confirmation requires an interactive terminal; use --yes for automation.")
-            if not typer.confirm(f"Apply documentation changes to {len(changed)} file(s)?", default=False):
-                typer.secho("Cancelled.", fg=typer.colors.YELLOW)
-                return
-        for item in changed:
-            apply(item)
-        typer.secho(f"Documentation applied to {len(changed)} file(s).", fg=typer.colors.GREEN, bold=True)
+        typer.secho(f"Documentation applied to {len(completed)} file(s).", fg=typer.colors.GREEN, bold=True)
         if skipped:
             typer.secho(f"Skipped files: {len(skipped)}", fg=typer.colors.YELLOW, bold=True)
     except (DocGubError, UnicodeDecodeError, SyntaxError) as exc:
