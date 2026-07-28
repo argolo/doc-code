@@ -4,6 +4,9 @@ from __future__ import annotations
 import ast
 import difflib
 import hashlib
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,6 +97,34 @@ def _documentation_indent(lines: list[str], symbol: Symbol, suffix: str) -> str:
     return symbol.indent + "    "
 
 
+def _validate_javascript(content: str, suffix: str, path: Path) -> None:
+    """Parse generated JS/TS before it can be applied to the working tree."""
+    if suffix == ".js":
+        command = ["node", "--check"]
+    else:
+        compiler = shutil.which("tsc")
+        if not compiler:
+            raise DocGubError(
+                f"{path}: TypeScript validation requires `tsc` on PATH; no file was changed."
+            )
+        command = [compiler, "--noEmit", "--noCheck", "--pretty", "false", "--allowJs"]
+        if suffix in {".jsx", ".tsx"}:
+            command.extend(["--jsx", "preserve"])
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", suffix=suffix, prefix="doc-gub-", delete=False
+    ) as temporary:
+        temporary.write(content)
+        candidate = Path(temporary.name)
+    try:
+        result = subprocess.run([*command, str(candidate)], text=True, capture_output=True, check=False)
+    finally:
+        candidate.unlink(missing_ok=True)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise DocGubError(f"{path}: generated documentation failed {suffix} validation: {detail}")
+
+
 def prepare(path: Path, symbols: list[Symbol], descriptions: dict[str, str], settings: Settings) -> PreparedFile:
     before = path.read_text(encoding="utf-8")
     if len(before.encode("utf-8")) > settings.max_file_bytes:
@@ -119,6 +150,8 @@ def prepare(path: Path, symbols: list[Symbol], descriptions: dict[str, str], set
     after = "".join(lines)
     if path.suffix == ".py" and _python_code_shape(before) != _python_code_shape(after):
         raise DocGubError(f"{path}: refusing an edit that changes Python code.")
+    if after != before and path.suffix in {".js", ".jsx", ".ts", ".tsx"}:
+        _validate_javascript(after, path.suffix, path)
     changed = tuple(item for item in selected if item not in ignored)
     return PreparedFile(path, before, after, fingerprint(before), tuple(symbols), changed, tuple(ignored))
 
