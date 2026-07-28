@@ -8,7 +8,7 @@ Por padrão, ele mostra um resumo compacto da geração, sem despejar código no
 doc-gub --output apply
 ```
 
-Em automações, use `--yes` junto com `--output apply`. O arquivo é comparado com a prévia imediatamente antes da escrita; se tiver sido alterado, o `doc-gub` não o sobrescreve.
+Em automações, use `--yes` junto com `--output apply`. Cada arquivo é gravado assim que sua geração e validação terminam; falhas posteriores não desfazem arquivos já aplicados. O arquivo é comparado com a prévia imediatamente antes da escrita; se tiver sido alterado, o `doc-gub` não o sobrescreve.
 
 ## Uso
 
