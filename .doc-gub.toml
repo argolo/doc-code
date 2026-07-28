@@ -1,0 +1,23 @@
+[ai]
+provider = "ollama"
+models = ["qwen2.5-coder:14b", "gemma4:e4b"]
+endpoint = "http://localhost:11434/api/generate"
+max_input_tokens = 12000
+context_window_tokens = 32768
+max_output_tokens = 800
+temperature = 0.2
+timeout_seconds = 60
+
+[documentation]
+selection = "changes"
+coverage = "missing"
+existing_docs = "preserve"
+python_format = "google"
+javascript_format = "jsdoc"
+output = "apply"
+confirm = true
+
+[limits]
+max_files_per_request = 50
+max_file_bytes = 100000
+exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js", "**/package-lock.json"]
