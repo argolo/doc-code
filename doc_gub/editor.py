@@ -1,6 +1,7 @@
 """Textual edits with content fingerprints to prevent stale previews from overwriting work."""
 from __future__ import annotations
 
+import ast
 import difflib
 import hashlib
 from dataclasses import dataclass
@@ -30,6 +31,69 @@ def fingerprint(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _python_code_shape(content: str) -> str:
+    """Return a Python AST representation with only documentation expressions removed."""
+    tree = ast.parse(content)
+
+    class RemoveDocstrings(ast.NodeTransformer):
+        def visit_Module(self, node: ast.Module) -> ast.Module:
+            self.generic_visit(node)
+            _remove_leading_docstring(node.body)
+            return node
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
+            self.generic_visit(node)
+            _remove_leading_docstring(node.body)
+            return node
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+            self.generic_visit(node)
+            _remove_leading_docstring(node.body)
+            return node
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
+            self.generic_visit(node)
+            _remove_leading_docstring(node.body)
+            return node
+
+    return ast.dump(RemoveDocstrings().visit(tree), include_attributes=False)
+
+
+def _remove_leading_docstring(body: list[ast.stmt]) -> None:
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        if isinstance(body[0].value.value, str):
+            body.pop(0)
+
+
+def _module_insertion(lines: list[str]) -> int:
+    """Keep Unix shebang and Python encoding declarations in their required positions."""
+    insertion = 1 if lines and lines[0].startswith("#!") else 0
+    coding = "coding"
+    if insertion < len(lines) and coding in lines[insertion][:80]:
+        insertion += 1
+    return insertion
+
+
+def _is_inline_python_suite(lines: list[str], symbol: Symbol) -> bool:
+    """A docstring cannot be inserted into a one-line Python function or class safely."""
+    header = lines[symbol.line - 1].split("#", maxsplit=1)[0]
+    return ":" in header and bool(header.rsplit(":", maxsplit=1)[1].strip())
+
+
+def _documentation_indent(lines: list[str], symbol: Symbol, suffix: str) -> str:
+    """Use the body's existing indentation for Python docstrings."""
+    if suffix != ".py" or symbol.kind == "module":
+        return symbol.indent
+    if symbol.has_doc and symbol.doc_start:
+        return lines[symbol.doc_start - 1][: len(lines[symbol.doc_start - 1]) - len(lines[symbol.doc_start - 1].lstrip())]
+    for line in lines[symbol.line:symbol.end_line]:
+        if line.strip():
+            indentation = line[: len(line) - len(line.lstrip())]
+            if len(indentation) > len(symbol.indent):
+                return indentation
+    return symbol.indent + "    "
+
+
 def prepare(path: Path, symbols: list[Symbol], descriptions: dict[str, str], settings: Settings) -> PreparedFile:
     before = path.read_text(encoding="utf-8")
     if len(before.encode("utf-8")) > settings.max_file_bytes:
@@ -38,17 +102,24 @@ def prepare(path: Path, symbols: list[Symbol], descriptions: dict[str, str], set
     ignored = [item for item in symbols if item not in selected]
     lines = before.splitlines(keepends=True)
     for symbol in reversed(selected):
+        if path.suffix == ".py" and not symbol.has_doc and symbol.kind != "module":
+            if _is_inline_python_suite(lines, symbol):
+                ignored.append(symbol)
+                continue
         documentation = render(symbol, descriptions.get(symbol.name, ""), path.suffix, settings.python_format)
-        rendered = [f"{symbol.indent}{row}\n" for row in documentation.splitlines()]
+        indentation = _documentation_indent(lines, symbol, path.suffix)
+        rendered = [f"{indentation}{row}\n" for row in documentation.splitlines()]
         if symbol.has_doc and settings.existing_docs == "replace" and symbol.doc_start and symbol.doc_end:
             lines[symbol.doc_start - 1:symbol.doc_end] = rendered
         elif not symbol.has_doc:
-            insertion = symbol.line if path.suffix == ".py" else symbol.line - 1
+            insertion = _module_insertion(lines) if path.suffix == ".py" and symbol.kind == "module" else symbol.line if path.suffix == ".py" else symbol.line - 1
             lines[insertion:insertion] = rendered
         else:
             ignored.append(symbol)
     after = "".join(lines)
-    changed = tuple(item for item in selected if not item.has_doc or settings.existing_docs == "replace")
+    if path.suffix == ".py" and _python_code_shape(before) != _python_code_shape(after):
+        raise DocGubError(f"{path}: refusing an edit that changes Python code.")
+    changed = tuple(item for item in selected if item not in ignored)
     return PreparedFile(path, before, after, fingerprint(before), tuple(symbols), changed, tuple(ignored))
 
 
