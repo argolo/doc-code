@@ -69,11 +69,41 @@ def _show(item: PreparedFile, model: str, elapsed: float) -> None:
         typer.secho("No documentation changes needed.", fg=typer.colors.BRIGHT_BLACK)
 
 
+def _show_skipped(relative: str, reason: str) -> None:
+    """Report a file-level generation failure without stopping the remaining scope."""
+    typer.echo()
+    typer.secho(f"Skipped documentation: {relative}", fg=typer.colors.YELLOW, bold=True)
+    typer.secho(f"Reason: {reason}")
+
+
+def _show_check(missing: dict[str, list[str]]) -> None:
+    """Print the actionable output used by CI and local check runs."""
+    if not missing:
+        typer.secho("Documentation check passed.", fg=typer.colors.GREEN, bold=True)
+        return
+    typer.secho("Documentation is missing:", fg=typer.colors.YELLOW, bold=True)
+    for relative, symbols in missing.items():
+        typer.echo(f"  {relative}: {', '.join(symbols)}")
+
+
+def _model_for_attempt(candidates: tuple[str, ...], attempt: int) -> str:
+    """Cycle configured fallback models instead of pinning later retries to the last one."""
+    return candidates[(attempt - 1) % len(candidates)]
+
+
+def _undocumented_symbols(content: str, suffix: str) -> list[str]:
+    """Return symbols that make `--check` fail without requesting AI output."""
+    return [symbol.name for symbol in discover(content, suffix) if not symbol.has_doc]
+
+
 @app.command()
 def doc_gub(
     path: Optional[Path] = typer.Argument(None, metavar="[PATH]", help="File or directory inside the Git worktree."),
     output: Optional[str] = typer.Option(None, "--output", help="preview (default) or apply."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Alias for --output preview."),
+    check: bool = typer.Option(
+        False, "--check", help="Exit with status 1 when eligible symbols are undocumented; never calls AI."
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip global confirmation when applying."),
     coverage: Optional[str] = typer.Option(None, "--coverage", help="missing, minimal, or all."),
     existing_docs: Optional[str] = typer.Option(None, "--existing-docs", help="preserve or replace."),
@@ -92,9 +122,22 @@ def doc_gub(
     """Preview or safely apply AI-generated docs to Python, JavaScript and TypeScript."""
     try:
         repo = GitRepo()
-        settings = load(repo.root, config, output="preview" if dry_run else output, coverage=coverage, existing_docs=existing_docs, language=language, selection=selection, python_format=python_format, provider=provider, model=model, timeout_seconds=timeout_seconds, max_input_tokens=max_input_tokens, context_window_tokens=context_window_tokens)
+        settings = load(repo.root, config, output="preview" if dry_run or check else output, coverage=coverage, existing_docs=existing_docs, language=language, selection=selection, python_format=python_format, provider=provider, model=model, timeout_seconds=timeout_seconds, max_input_tokens=max_input_tokens, context_window_tokens=context_window_tokens)
+        files = resolve(repo, path, settings)
+        if check:
+            missing: dict[str, list[str]] = {}
+            for relative in files:
+                content = (repo.root / relative).read_text(encoding="utf-8")
+                undocumented = _undocumented_symbols(content, Path(relative).suffix)
+                if undocumented:
+                    missing[relative] = undocumented
+            _show_check(missing)
+            if missing:
+                raise typer.Exit(1)
+            return
         prepared: list[PreparedFile] = []
-        for relative in resolve(repo, path, settings):
+        skipped: list[str] = []
+        for relative in files:
             file_path = repo.root / relative
             content = file_path.read_text(encoding="utf-8")
             symbols = discover(content, file_path.suffix)
@@ -107,9 +150,8 @@ def doc_gub(
             started = perf_counter()
             last_error: Exception | None = None
             for attempt in range(1, MAX_AI_ATTEMPTS + 1):
-                candidate = settings.model_candidates[
-                    min(attempt - 1, len(settings.model_candidates) - 1)
-                ]
+                candidates = settings.model_candidates
+                candidate = _model_for_attempt(candidates, attempt)
                 try:
                     with _loading(
                         f"Generating documentation for [{relative}] with model [{candidate}] "
@@ -119,25 +161,34 @@ def doc_gub(
                             content, targets, replace(settings, model=candidate, models=())
                         )
                     break
-                except (AITimeoutError, InvalidAIResponseError) as exc:
+                except (AIProviderError, InvalidAIResponseError) as exc:
                     last_error = exc
                     if attempt < MAX_AI_ATTEMPTS:
-                        next_model = settings.model_candidates[
-                            min(attempt, len(settings.model_candidates) - 1)
-                        ]
-                        reason = "AI request timed out" if isinstance(exc, AITimeoutError) else "Invalid AI response"
+                        next_model = _model_for_attempt(candidates, attempt + 1)
+                        reason = "AI request timed out" if isinstance(exc, AITimeoutError) else str(exc)
                         typer.secho(
                             f"{reason} with model [{candidate}]. Retrying with model "
                             f"[{next_model}] ({attempt + 1}/{MAX_AI_ATTEMPTS})...",
                             fg=typer.colors.YELLOW,
                         )
             else:
-                raise DocGubError(f"{relative}: generation failed after {MAX_AI_ATTEMPTS} attempts: {last_error}")
-            item = prepare(file_path, symbols, descriptions, settings)
+                skipped.append(relative)
+                _show_skipped(
+                    relative, f"generation failed after {MAX_AI_ATTEMPTS} attempts: {last_error}"
+                )
+                continue
+            try:
+                item = prepare(file_path, symbols, descriptions, settings)
+            except DocGubError as exc:
+                skipped.append(relative)
+                _show_skipped(relative, str(exc))
+                continue
             _show(item, candidate, perf_counter() - started)
             prepared.append(item)
         changed = [item for item in prepared if item.diff]
         if settings.output == "preview" or not changed:
+            if skipped:
+                typer.secho(f"Skipped files: {len(skipped)}", fg=typer.colors.YELLOW, bold=True)
             return
         if settings.confirm and not yes:
             if not sys.stdin.isatty():
@@ -148,6 +199,8 @@ def doc_gub(
         for item in changed:
             apply(item)
         typer.secho(f"Documentation applied to {len(changed)} file(s).", fg=typer.colors.GREEN, bold=True)
+        if skipped:
+            typer.secho(f"Skipped files: {len(skipped)}", fg=typer.colors.YELLOW, bold=True)
     except (DocGubError, UnicodeDecodeError, SyntaxError) as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, bold=True, err=True)
         raise typer.Exit(1) from exc
