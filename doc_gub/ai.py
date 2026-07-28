@@ -13,10 +13,20 @@ from .symbols import Symbol
 
 
 def estimate_tokens(text: str) -> int:
+    """Estima o número aproximado de tokens necessários para uma determinada string, utilizando um cálculo baseado na codificação UTF-8. Essencial para verificar limites de contexto da API.
+    
+    Args:
+        text: Description of text."""
     return ceil(len(text.encode("utf-8")) / 3)
 
 
 def prompt(content: str, symbols: list[Symbol], language: str = "English") -> str:
+    """Constrói um prompt formatado e detalhado, incluindo instruções específicas (JSON output), símbolos solicitados e o conteúdo fonte, otimizado para ser enviado a modelos de linguagem de IA.
+    
+    Args:
+        content: Description of content.
+        symbols: Description of symbols.
+        language: Description of language."""
     names = [{"symbol": item.name, "kind": item.kind, "arguments": item.args} for item in symbols]
     return (
         "Return only a JSON object mapping each requested symbol to a concise factual "
@@ -29,6 +39,13 @@ def prompt(content: str, symbols: list[Symbol], language: str = "English") -> st
 
 
 def _post(url: str, payload: dict, headers: dict[str, str], timeout: int) -> dict:
+    """Função utilitária que realiza requisições HTTP POST para endpoints externos (APIs). É responsável por enviar payloads JSON, gerenciar cabeçalhos e tratar exceções como timeouts ou erros de resposta da API.
+    
+    Args:
+        url: Description of url.
+        payload: Description of payload.
+        headers: Description of headers.
+        timeout: Description of timeout."""
     try:
         with urlopen(Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST"), timeout=timeout) as response:  # nosec B310 - user-configured endpoint
             return json.loads(response.read())
@@ -43,6 +60,12 @@ def _post(url: str, payload: dict, headers: dict[str, str], timeout: int) -> dic
 
 
 def documentation_for(content: str, symbols: list[Symbol], settings: Settings) -> dict[str, str]:
+    """Função principal que orquestra a geração completa da documentação. Recebe o conteúdo fonte, os símbolos e as configurações do provedor de IA (OpenAI, Gemini, etc.), validando limites de tokens e retornando um dicionário JSON com descrições factuais para cada símbolo.
+    
+    Args:
+        content: Description of content.
+        symbols: Description of symbols.
+        settings: Description of settings."""
     body = prompt(content, symbols, settings.language)
     tokens = estimate_tokens(body)
     if tokens > settings.max_input_tokens or tokens + settings.max_output_tokens > settings.context_window_tokens:
