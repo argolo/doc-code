@@ -55,8 +55,27 @@ def javascript_symbols(content: str) -> list[Symbol]:
         kind = "class" if match.group("class") else "function"
         args = match.group("args") or match.group("methodargs") or ""
         arguments = tuple(item.strip().split("=")[0].strip() for item in args.split(",") if item.strip())
-        previous = lines[index - 1].strip() if index else ""
-        found.append(Symbol(name, kind, index + 1, index + 1, match.group("indent"), arguments, previous.endswith("*/")))
+        doc_start: int | None = None
+        doc_end: int | None = None
+        if index and lines[index - 1].strip().endswith("*/"):
+            for doc_index in range(index - 1, -1, -1):
+                if lines[doc_index].strip().startswith("/**"):
+                    doc_start = doc_index + 1
+                    doc_end = index
+                    break
+        found.append(
+            Symbol(
+                name,
+                kind,
+                index + 1,
+                index + 1,
+                match.group("indent"),
+                arguments,
+                doc_start is not None,
+                doc_start,
+                doc_end,
+            )
+        )
     return found
 
 
