@@ -152,18 +152,26 @@ def _validate_javascript(content: str, suffix: str, path: Path) -> None:
         raise DocGubError(f"{path}: generated documentation failed {suffix} validation: {detail}")
 
 
-def prepare(path: Path, symbols: list[Symbol], descriptions: dict[str, str], settings: Settings) -> PreparedFile:
-    """Prepara um objeto PreparedFile, calculando as diferenças e validando se a edição proposta não altera o código funcional em Python ou é válida em JS/TS.
-    
-    Args:
-        path: Description of path.
-        symbols: Description of symbols.
-        descriptions: Description of descriptions.
-        settings: Description of settings."""
+def prepare(
+    path: Path,
+    symbols: list[Symbol],
+    descriptions: dict[str, str],
+    settings: Settings,
+    selected_symbols: list[Symbol] | None = None,
+) -> PreparedFile:
+    """Prepara um objeto PreparedFile, calculando as diferenças e validando a edição.
+
+    `selected_symbols` limita a alteração a símbolos já gerados, permitindo gravar
+    resultados incrementais no modo de escopo por símbolo.
+    """
     before = path.read_text(encoding="utf-8")
     if len(before.encode("utf-8")) > settings.max_file_bytes:
         raise DocGubError(f"{path}: exceeds max_file_bytes.")
-    selected = [item for item in symbols if eligible(item, settings.coverage)]
+    selected = (
+        selected_symbols
+        if selected_symbols is not None
+        else [item for item in symbols if eligible(item, settings.coverage)]
+    )
     ignored = [item for item in symbols if item not in selected]
     lines = before.splitlines(keepends=True)
     for symbol in reversed(selected):
