@@ -84,6 +84,12 @@ def _show_skipped(relative: str, reason: str) -> None:
     typer.secho(f"Reason: {reason}")
 
 
+def _show_symbol_completed(relative: str, symbol_name: str, applied: bool) -> None:
+    """Show a durable per-symbol progress event in symbol request mode."""
+    action = "Applied documentation" if applied else "Generated documentation"
+    typer.secho(f"{action}: {relative}:{symbol_name}", fg=typer.colors.GREEN)
+
+
 def _show_check(missing: dict[str, list[str]]) -> None:
     """Print the actionable output used by CI and local check runs."""
     if not missing:
@@ -192,9 +198,42 @@ def doc_gub(
                             f"Generating documentation for [{label}] with model [{candidate}] "
                             f"({attempt}/{MAX_AI_ATTEMPTS})..."
                         ):
-                            descriptions.update(documentation_for(
+                            generated = documentation_for(
                                 source, requested_symbols, replace(settings, model=candidate, models=())
-                            ))
+                            )
+                            descriptions.update(generated)
+                        if settings.request_scope == "symbol":
+                            target = requested_symbols[0]
+                            if settings.output == "apply":
+                                current_symbols = discover(
+                                    file_path.read_text(encoding="utf-8"), file_path.suffix
+                                )
+                                current_target = next(
+                                    (
+                                        symbol
+                                        for symbol in current_symbols
+                                        if symbol.name == target.name and symbol.kind == target.kind
+                                    ),
+                                    None,
+                                )
+                                if current_target is None:
+                                    raise DocGubError(
+                                        f"{relative}: symbol `{target.name}` changed during generation."
+                                    )
+                                item = prepare(
+                                    file_path,
+                                    current_symbols,
+                                    generated,
+                                    settings,
+                                    selected_symbols=[current_target],
+                                )
+                                if item.diff:
+                                    apply(item)
+                                    if relative not in completed:
+                                        completed.append(relative)
+                                _show_symbol_completed(relative, target.name, bool(item.diff))
+                            else:
+                                _show_symbol_completed(relative, target.name, False)
                         break
                     except (AIProviderError, InvalidAIResponseError) as exc:
                         last_error = exc
@@ -214,6 +253,8 @@ def doc_gub(
                 _show_skipped(
                     relative, f"generation failed after {MAX_AI_ATTEMPTS} attempts: {last_error}"
                 )
+                continue
+            if settings.request_scope == "symbol" and settings.output == "apply":
                 continue
             try:
                 item = prepare(file_path, symbols, descriptions, settings)
