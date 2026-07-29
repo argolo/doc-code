@@ -1,6 +1,6 @@
 [ai]
 provider = "ollama"
-models = ["gemma4:12b-mlx", "gemma4:e4b", "qwen2.5-coder:14b"]
+models = ["gemma4:e4b", "qwen2.5-coder:14b", "gemma4:12b-mlx"]
 endpoint = "http://localhost:11434/api/generate"
 max_input_tokens = 3000
 context_window_tokens = 8192
