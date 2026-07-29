@@ -12,6 +12,7 @@ from .errors import DocGubError
 
 @dataclass(frozen=True)
 class Settings:
+    """Classe imutável que armazena todas as configurações operacionais do sistema, incluindo parâmetros de modelo, limites de arquivo e formatos de documentação."""
     provider: str = "ollama"
     model: str = "qwen2.5-coder:14b"
     models: tuple[str, ...] = ("qwen2.5-coder:14b", "gemma4:e4b")
@@ -38,6 +39,7 @@ class Settings:
 
     @property
     def model_candidates(self) -> tuple[str, ...]:
+        """Propriedade getter que retorna uma tupla contendo os modelos candidatos configurados para uso (padrão: `self.models` ou apenas `self.model`)."""
         return self.models or (self.model,)
 
 
@@ -69,6 +71,10 @@ exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js", "**
 
 
 def _read(path: Path) -> dict[str, Any]:
+    """Função auxiliar que carrega configurações de um caminho TOML especificado, combinando seções 'ai', 'documentation' e 'limits'.
+    
+    Args:
+        path: Description of path."""
     if not path.is_file():
         return {}
     try:
@@ -80,6 +86,7 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def _env() -> dict[str, Any]:
+    """Função auxiliar que coleta valores de variáveis de ambiente prefixadas com 'DOC_GUB_' para configurar o objeto Settings."""
     names = (
         "provider", "model", "endpoint", "max_input_tokens", "context_window_tokens",
         "max_output_tokens", "temperature", "timeout_seconds", "selection", "coverage",
@@ -93,6 +100,11 @@ def _env() -> dict[str, Any]:
 
 
 def load(repo_root: Path, config_path: Path | None = None, **overrides: Any) -> Settings:
+    """Carrega as configurações do sistema seguindo uma ordem estrita de precedência: (1) Configuração global em `~/.config/doc-gub/config.toml`, (2) Configuração local em `./.doc-gub.toml` (relativo ao repositório), (3) Variáveis de ambiente, e finalmente (4) Argumentos de sobrescrita passados diretamente.
+    
+    Args:
+        repo_root: Description of repo_root.
+        config_path: Description of config_path."""
     values: dict[str, Any] = asdict(Settings())
     for layer in (_read(Path.home() / ".config/doc-gub/config.toml"), _read(repo_root / ".doc-gub.toml"), _env()):
         values.update(layer)
