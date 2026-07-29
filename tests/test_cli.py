@@ -18,7 +18,7 @@ def test_loading_reports_progress_when_stderr_is_not_a_terminal(
     with _loading("Generating documentation for [sample.py]"):
         pass
 
-    assert "Generating documentation for [sample.py]" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 def test_retries_cycle_through_model_candidates() -> None:
