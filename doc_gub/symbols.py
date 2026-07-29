@@ -111,6 +111,33 @@ def eligible(symbol: Symbol, coverage: str) -> bool:
     return coverage == "all" or not symbol.has_doc
 
 
+def source_for_symbol(content: str, symbol: Symbol, suffix: str) -> str:
+    """Return the smallest self-contained source region available for one symbol.
+
+    Python symbols have AST-derived end lines. JavaScript discovery is intentionally
+    lightweight, so its region ends when its braces balance (or at a semicolon for
+    expression-bodied arrow functions). Module documentation remains file-scoped.
+    """
+    if symbol.kind == "module":
+        return content
+    lines = content.splitlines(keepends=True)
+    start = symbol.line - 1
+    if suffix == ".py":
+        while start > 0 and lines[start - 1].lstrip().startswith("@"):
+            start -= 1
+        return "".join(lines[start:symbol.end_line])
+
+    depth = 0
+    opened = False
+    for index in range(start, len(lines)):
+        line = lines[index]
+        depth += line.count("{") - line.count("}")
+        opened = opened or "{" in line
+        if (opened and depth <= 0) or (not opened and ";" in line):
+            return "".join(lines[start:index + 1])
+    return "".join(lines[start:])
+
+
 def render(symbol: Symbol, description: str, suffix: str, python_format: str) -> str:
     """Formata a descrição textual de um símbolo (docstring) no formato apropriado, seja ele Python docstrings ou JSDoc.
     
