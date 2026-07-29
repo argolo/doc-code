@@ -54,7 +54,11 @@ def test_apply_writes_each_file_before_later_generation_failures(
     settings = Settings(output="apply", confirm=False, selection="repository", models=("test",))
     monkeypatch.setattr(cli, "GitRepo", Repo)
     monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
-    monkeypatch.setattr(cli, "resolve", lambda *_args: ["first.py", "second.py"])
+    def fake_resolve(_: object, paths: list[Path], __: Settings) -> list[str]:
+        assert paths == [Path("first.py"), Path("second.py")]
+        return ["first.py", "second.py"]
+
+    monkeypatch.setattr(cli, "resolve", fake_resolve)
     monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
 
     def fake_documentation(content: str, symbols: list[Symbol], _: Settings) -> dict[str, str]:
@@ -64,7 +68,7 @@ def test_apply_writes_each_file_before_later_generation_failures(
 
     monkeypatch.setattr(cli, "documentation_for", fake_documentation)
 
-    result = CliRunner().invoke(cli.app, [])
+    result = CliRunner().invoke(cli.app, ["first.py", "second.py"])
 
     assert result.exit_code == 0, result.output
     assert '"""Generated docs."""' in first.read_text(encoding="utf-8")
