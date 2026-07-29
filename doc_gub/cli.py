@@ -84,12 +84,6 @@ def _show_skipped(relative: str, reason: str) -> None:
     typer.secho(f"Reason: {reason}")
 
 
-def _show_symbol_completed(relative: str, symbol_name: str, applied: bool) -> None:
-    """Show a durable per-symbol progress event in symbol request mode."""
-    action = "Applied documentation" if applied else "Generated documentation"
-    typer.secho(f"{action}: {relative}:{symbol_name}", fg=typer.colors.GREEN)
-
-
 def _show_check(missing: dict[str, list[str]]) -> None:
     """Print the actionable output used by CI and local check runs."""
     if not missing:
@@ -188,11 +182,13 @@ def doc_gub(
             ]
             descriptions: dict[str, str] = {}
             generation_failed = False
-            for source, requested_symbols in requests:
+            for request_number, (source, requested_symbols) in enumerate(requests, start=1):
                 for attempt in range(1, MAX_AI_ATTEMPTS + 1):
                     candidates = settings.model_candidates
                     candidate = _model_for_attempt(candidates, attempt)
-                    label = relative if settings.request_scope == "file" else f"{relative}:{requested_symbols[0].name}"
+                    label = relative if settings.request_scope == "file" else (
+                        f"{request_number}/{len(requests)} {relative}:{requested_symbols[0].name}"
+                    )
                     try:
                         with _loading(
                             f"Generating documentation for [{label}] with model [{candidate}] "
@@ -231,9 +227,6 @@ def doc_gub(
                                     apply(item)
                                     if relative not in completed:
                                         completed.append(relative)
-                                _show_symbol_completed(relative, target.name, bool(item.diff))
-                            else:
-                                _show_symbol_completed(relative, target.name, False)
                         break
                     except (AIProviderError, InvalidAIResponseError) as exc:
                         last_error = exc
