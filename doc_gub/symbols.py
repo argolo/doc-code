@@ -119,7 +119,7 @@ def source_for_symbol(content: str, symbol: Symbol, suffix: str) -> str:
     expression-bodied arrow functions). Module documentation remains file-scoped.
     """
     if symbol.kind == "module":
-        return content
+        return _module_outline(content, suffix)
     lines = content.splitlines(keepends=True)
     start = symbol.line - 1
     if suffix == ".py":
@@ -136,6 +136,72 @@ def source_for_symbol(content: str, symbol: Symbol, suffix: str) -> str:
         if (opened and depth <= 0) or (not opened and ";" in line):
             return "".join(lines[start:index + 1])
     return "".join(lines[start:])
+
+
+def _module_outline(content: str, suffix: str) -> str:
+    """Create a compact module overview without including implementation bodies."""
+    if suffix == ".py":
+        return _python_module_outline(content)
+    return _javascript_module_outline(content)
+
+
+def _python_module_outline(content: str) -> str:
+    """Return Python module metadata, imports, constants, and public signatures."""
+    tree = ast.parse(content)
+    lines = content.splitlines(keepends=True)
+    outline = ["MODULE OUTLINE:"]
+    first = tree.body[0] if tree.body else None
+    if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
+        outline.append("MODULE DOCSTRING:")
+        outline.append("".join(lines[first.lineno - 1:first.end_lineno]).rstrip())
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            outline.append("".join(lines[node.lineno - 1:node.end_lineno]).rstrip())
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            names = _public_assignment_names(node)
+            if names:
+                outline.append(f"CONSTANTS: {', '.join(names)}")
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
+            outline.append(_python_definition_header(lines, node))
+    return "\n\n".join(part for part in outline if part)
+
+
+def _public_assignment_names(node: ast.Assign | ast.AnnAssign) -> list[str]:
+    """Return public top-level names without serializing potentially large values."""
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    return [target.id for target in targets if isinstance(target, ast.Name) and not target.id.startswith("_")]
+
+
+def _python_definition_header(
+    lines: list[str], node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+) -> str:
+    """Return decorators and the signature, stopping before the first body statement."""
+    start = node.lineno - 1
+    while start > 0 and lines[start - 1].lstrip().startswith("@"):
+        start -= 1
+    first_body_line = node.body[0].lineno - 1 if node.body else node.end_lineno
+    end = max(start + 1, first_body_line)
+    return "".join(lines[start:end]).rstrip()
+
+
+def _javascript_module_outline(content: str) -> str:
+    """Return imports and definition lines for JavaScript and TypeScript modules."""
+    lines = content.splitlines(keepends=True)
+    outline = ["MODULE OUTLINE:"]
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].lstrip()
+        if stripped.startswith(("import ", "export {", "export *")):
+            statement = [lines[index]]
+            while not statement[-1].rstrip().endswith(";") and index + 1 < len(lines):
+                index += 1
+                statement.append(lines[index])
+            outline.append("".join(statement).rstrip())
+        index += 1
+    for symbol in javascript_symbols(content):
+        if not symbol.name.startswith("_"):
+            outline.append(lines[symbol.line - 1].rstrip())
+    return "\n\n".join(part for part in outline if part)
 
 
 def render(symbol: Symbol, description: str, suffix: str, python_format: str) -> str:
