@@ -27,10 +27,8 @@ MAX_AI_ATTEMPTS = 3
 
 @contextmanager
 def _loading(message: str):
-    """Show an interactive spinner or one stable log line while the AI responds."""
-    typer.echo(err=True)
+    """Show one redrawable progress line while the AI responds interactively."""
     if not sys.stderr.isatty():
-        typer.secho(message, fg=typer.colors.CYAN, err=True)
         yield
         return
 
