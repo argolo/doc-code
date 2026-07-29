@@ -37,6 +37,7 @@ def _loading(message: str):
     stop = Event()
 
     def spin() -> None:
+        """Função interna usada por _loading para atualizar o estado visual do spinner em cada quadro."""
         for frame in "|/-\\":
             if stop.is_set():
                 break
@@ -44,6 +45,7 @@ def _loading(message: str):
             sleep(0.12)
 
     def loop() -> None:
+        """Função interna usada por _loading para manter o loop de atualização do spinner até que seja interrompido."""
         while not stop.is_set():
             spin()
 
@@ -58,6 +60,12 @@ def _loading(message: str):
 
 
 def _show(item: PreparedFile, model: str, elapsed: float) -> None:
+    """Exibe um resumo factual sobre os resultados da geração de documentação (arquivos, símbolos, tempo).
+    
+    Args:
+        item: Description of item.
+        model: Description of model.
+        elapsed: Description of elapsed."""
     relative = item.path.as_posix()
     typer.echo()
     typer.secho(relative, fg=typer.colors.CYAN, bold=True)
@@ -98,7 +106,11 @@ def _undocumented_symbols(content: str, suffix: str) -> list[str]:
 
 @app.command()
 def doc_gub(
-    path: Optional[Path] = typer.Argument(None, metavar="[PATH]", help="File or directory inside the Git worktree."),
+    paths: list[Path] = typer.Argument(
+        None,
+        metavar="[PATH]...",
+        help="One or more files or directories inside the Git worktree.",
+    ),
     output: Optional[str] = typer.Option(None, "--output", help="preview (default) or apply."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Alias for --output preview."),
     check: bool = typer.Option(
@@ -123,7 +135,7 @@ def doc_gub(
     try:
         repo = GitRepo()
         settings = load(repo.root, config, output="preview" if dry_run or check else output, coverage=coverage, existing_docs=existing_docs, language=language, selection=selection, python_format=python_format, provider=provider, model=model, timeout_seconds=timeout_seconds, max_input_tokens=max_input_tokens, context_window_tokens=context_window_tokens)
-        files = resolve(repo, path, settings)
+        files = resolve(repo, paths, settings)
         if check:
             missing: dict[str, list[str]] = {}
             for relative in files:
