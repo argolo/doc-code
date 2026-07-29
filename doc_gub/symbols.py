@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Symbol:
+    """Uma classe de dados imutável usada para armazenar metadados sobre um símbolo (módulo, classe ou função) encontrado no código fonte."""
     name: str
     kind: str
     line: int
@@ -20,6 +21,10 @@ class Symbol:
 
 
 def python_symbols(content: str) -> list[Symbol]:
+    """Analisa uma string de conteúdo Python e retorna uma lista de objetos Symbol que representam os símbolos definidos.
+    
+    Args:
+        content: Description of content."""
     tree = ast.parse(content)
     lines = content.splitlines()
     found: list[Symbol] = []
@@ -28,6 +33,11 @@ def python_symbols(content: str) -> list[Symbol]:
     found.append(Symbol("module", "module", 0, 0, "", (), module_doc, module_first.lineno if module_doc else None, module_first.end_lineno if module_doc else None))
 
     def visit(nodes: list[ast.stmt], prefix: str = "") -> None:
+        """Função auxiliar recursiva usada para percorrer nós AST e identificar símbolos aninhados (como métodos ou classes internas).
+        
+        Args:
+            nodes: Description of nodes.
+            prefix: Description of prefix."""
         for node in nodes:
             if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -45,6 +55,10 @@ _JS = re.compile(r"^(?P<indent>\s*)(?:export\s+)?(?:(?:async\s+)?function\s+(?P<
 
 
 def javascript_symbols(content: str) -> list[Symbol]:
+    """Analisa uma string de conteúdo JavaScript usando expressões regulares para extrair funções, classes e métodos JS.
+    
+    Args:
+        content: Description of content."""
     lines = content.splitlines()
     found: list[Symbol] = []
     for index, line in enumerate(lines):
@@ -80,14 +94,31 @@ def javascript_symbols(content: str) -> list[Symbol]:
 
 
 def discover(content: str, suffix: str) -> list[Symbol]:
+    """Determina qual função de análise de símbolos deve ser utilizada (`python` ou `javascript`) com base na extensão do arquivo fornecida.
+    
+    Args:
+        content: Description of content.
+        suffix: Description of suffix."""
     return python_symbols(content) if suffix == ".py" else javascript_symbols(content)
 
 
 def eligible(symbol: Symbol, coverage: str) -> bool:
+    """Verifica se um símbolo é considerado elegível para documentação, geralmente baseado em critérios de cobertura de testes ('all').
+    
+    Args:
+        symbol: Description of symbol.
+        coverage: Description of coverage."""
     return coverage == "all" or not symbol.has_doc
 
 
 def render(symbol: Symbol, description: str, suffix: str, python_format: str) -> str:
+    """Formata a descrição textual de um símbolo (docstring) no formato apropriado, seja ele Python docstrings ou JSDoc.
+    
+    Args:
+        symbol: Description of symbol.
+        description: Description of description.
+        suffix: Description of suffix.
+        python_format: Description of python_format."""
     description = " ".join(description.split()).strip() or f"Describe {symbol.name}."
     if suffix != ".py":
         rows = ["/**", f" * {description}"]
