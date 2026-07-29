@@ -13,6 +13,12 @@ DEFAULT_EXCLUDED_PARTS = {".git", "node_modules", "dist", "build", ".venv", "ven
 
 
 def _eligible(repo: GitRepo, relative: str, settings: Settings) -> bool:
+    """Verifica se um caminho relativo é elegível para inclusão, considerando extensões suportadas, exclusões padrão, regras personalizadas de exclusão/inclusão e a estrutura do repositório.
+    
+    Args:
+        repo: Description of repo.
+        relative: Description of relative.
+        settings: Description of settings."""
     path = repo.root / relative
     if not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
         return False
@@ -24,16 +30,27 @@ def _eligible(repo: GitRepo, relative: str, settings: Settings) -> bool:
     return not settings.include or any(fnmatch(normalized, pattern) for pattern in settings.include)
 
 
-def resolve(repo: GitRepo, requested: Path | None, settings: Settings) -> list[str]:
+def resolve(repo: GitRepo, requested: list[Path] | None, settings: Settings) -> list[str]:
+    """Resolve paths, Git changes, or the repository into one deduplicated file scope.
+    
+    Args:
+        repo: Description of repo.
+        requested: Description of requested.
+        settings: Description of settings."""
     if requested:
-        relative = repo.relative_path(requested)
-        source = repo.root / relative
-        candidates = [relative] if source.is_file() else [item.relative_to(repo.root).as_posix() for item in source.rglob("*")]
+        candidates: list[str] = []
+        for requested_path in requested:
+            relative = repo.relative_path(requested_path)
+            source = repo.root / relative
+            if source.is_file():
+                candidates.append(relative)
+            else:
+                candidates.extend(item.relative_to(repo.root).as_posix() for item in source.rglob("*"))
     elif settings.selection == "changes":
         candidates = repo.changed_files()
     else:
         candidates = [item.relative_to(repo.root).as_posix() for item in repo.root.rglob("*")]
-    files = sorted(item for item in candidates if _eligible(repo, item, settings))
+    files = sorted({item for item in candidates if _eligible(repo, item, settings)})
     if not files:
         raise DocGubError("No eligible Python, JavaScript, or TypeScript files found.")
     if len(files) > settings.max_files_per_request:
