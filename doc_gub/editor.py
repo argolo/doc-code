@@ -17,6 +17,7 @@ from .symbols import Symbol, eligible, render
 
 @dataclass(frozen=True)
 class PreparedFile:
+    """Uma estrutura de dados imutável que armazena as informações antes e depois das edições propostas em um arquivo, incluindo um fingerprint e os símbolos afetados."""
     path: Path
     before: str
     after: str
@@ -27,10 +28,15 @@ class PreparedFile:
 
     @property
     def diff(self) -> str:
+        """Gera uma string no formato unified diff comparando o conteúdo original (before) com o conteúdo editado (after)."""
         return "".join(difflib.unified_diff(self.before.splitlines(keepends=True), self.after.splitlines(keepends=True), fromfile=f"a/{self.path}", tofile=f"b/{self.path}"))
 
 
 def fingerprint(content: str) -> str:
+    """Calcula um hash SHA256 de uma string de conteúdo para criar uma impressão digital única do arquivo.
+    
+    Args:
+        content: Description of content."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
@@ -39,22 +45,39 @@ def _python_code_shape(content: str) -> str:
     tree = ast.parse(content)
 
     class RemoveDocstrings(ast.NodeTransformer):
+        """Um NodeTransformer AST usado para percorrer e modificar nós de código Python, removendo docstrings em módulos, classes e funções."""
         def visit_Module(self, node: ast.Module) -> ast.Module:
+            """Visita um nó de módulo (ast.Module), garantindo que as docstrings iniciais sejam removidas do corpo do módulo.
+            
+            Args:
+                node: Description of node."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
 
         def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
+            """Visita um nó de definição de classe (ast.ClassDef), garantindo que as docstrings iniciais sejam removidas do corpo da classe.
+            
+            Args:
+                node: Description of node."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+            """Visita um nó de definição de função (ast.FunctionDef), garantindo que as docstrings iniciais sejam removidas do corpo da função.
+            
+            Args:
+                node: Description of node."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
 
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
+            """Visita um nó de definição de função assíncrona (ast.AsyncFunctionDef), garantindo que as docstrings iniciais sejam removidas do corpo da função.
+            
+            Args:
+                node: Description of node."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
@@ -63,6 +86,10 @@ def _python_code_shape(content: str) -> str:
 
 
 def _remove_leading_docstring(body: list[ast.stmt]) -> None:
+    """Função utilitária para remover a primeira declaração de string (docstring) de uma lista de nós de instrução (body).
+    
+    Args:
+        body: Description of body."""
     if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
         if isinstance(body[0].value.value, str):
             body.pop(0)
@@ -126,6 +153,13 @@ def _validate_javascript(content: str, suffix: str, path: Path) -> None:
 
 
 def prepare(path: Path, symbols: list[Symbol], descriptions: dict[str, str], settings: Settings) -> PreparedFile:
+    """Prepara um objeto PreparedFile, calculando as diferenças e validando se a edição proposta não altera o código funcional em Python ou é válida em JS/TS.
+    
+    Args:
+        path: Description of path.
+        symbols: Description of symbols.
+        descriptions: Description of descriptions.
+        settings: Description of settings."""
     before = path.read_text(encoding="utf-8")
     if len(before.encode("utf-8")) > settings.max_file_bytes:
         raise DocGubError(f"{path}: exceeds max_file_bytes.")
@@ -157,6 +191,10 @@ def prepare(path: Path, symbols: list[Symbol], descriptions: dict[str, str], set
 
 
 def apply(prepared: PreparedFile) -> None:
+    """Aplica as edições contidas em um objeto PreparedFile ao sistema de arquivos, mas somente se o fingerprint do arquivo atual corresponder ao esperado.
+    
+    Args:
+        prepared: Description of prepared."""
     current = prepared.path.read_text(encoding="utf-8")
     if fingerprint(current) != prepared.fingerprint:
         raise DocGubError(f"{prepared.path}: changed after preview; file was not written.")
