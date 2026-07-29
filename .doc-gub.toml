@@ -1,12 +1,12 @@
 [ai]
 provider = "ollama"
-models = ["gemma4:e4b", "qwen2.5-coder:14b"]
+models = ["gemma4:e4b", "qwen2.5-coder:14b", "gemma4:12b-mlx"]
 endpoint = "http://localhost:11434/api/generate"
-max_input_tokens = 8000
-context_window_tokens = 32768
-max_output_tokens = 800
+max_input_tokens = 2048
+context_window_tokens = 16384
+max_output_tokens = 512
 temperature = 0.1
-timeout_seconds = 120
+timeout_seconds = 180
 
 [documentation]
 selection = "repository"
