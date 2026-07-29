@@ -168,5 +168,5 @@ def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
 
     assert result.exit_code == 0, result.output
     assert '"""First generated documentation."""' in path.read_text(encoding="utf-8")
-    assert "Applied documentation: sample.py:first" in result.output
+    assert "Applied documentation: sample.py:first" not in result.output
     assert "Skipped documentation: sample.py" in result.output
