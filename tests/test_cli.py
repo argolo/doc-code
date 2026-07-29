@@ -84,6 +84,27 @@ def test_symbol_scope_contains_only_the_requested_python_function() -> None:
     assert source_for_symbol(content, second, ".py") == "def second():\n    return 2\n"
 
 
+def test_module_symbol_scope_uses_a_python_outline_without_function_bodies() -> None:
+    content = '''"""Utilities for values."""
+import math
+
+DEFAULT_SCALE = 2
+
+def calculate(value):
+    internal_detail = value * math.pi
+    return internal_detail * DEFAULT_SCALE
+'''
+    module = next(symbol for symbol in discover(content, ".py") if symbol.kind == "module")
+
+    scope = source_for_symbol(content, module, ".py")
+
+    assert '"""Utilities for values."""' in scope
+    assert "import math" in scope
+    assert "CONSTANTS: DEFAULT_SCALE" in scope
+    assert "def calculate(value):" in scope
+    assert "internal_detail" not in scope
+
+
 def test_symbol_request_scope_calls_the_model_once_per_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -115,3 +136,37 @@ def test_symbol_request_scope_calls_the_model_once_per_target(
         ("def first():\n    return 1\n", ["first"]),
         ("def second():\n    return 2\n", ["second"]),
     ]
+
+
+def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = '"""Module docs."""\n\ndef first():\n    return 1\n\ndef second():\n    return 2\n'
+    path = tmp_path / "sample.py"
+    path.write_text(source, encoding="utf-8")
+
+    class Repo:
+        def __init__(self) -> None:
+            self.root = tmp_path
+
+    settings = Settings(
+        output="apply", confirm=False, request_scope="symbol", models=("test",)
+    )
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["sample.py"])
+    monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
+
+    def fake_documentation(_: str, symbols: list[Symbol], __: Settings) -> dict[str, str]:
+        if symbols[0].name == "second":
+            raise AIProviderError("provider unavailable")
+        return {"first": "First generated documentation."}
+
+    monkeypatch.setattr(cli, "documentation_for", fake_documentation)
+
+    result = CliRunner().invoke(cli.app, ["sample.py"])
+
+    assert result.exit_code == 0, result.output
+    assert '"""First generated documentation."""' in path.read_text(encoding="utf-8")
+    assert "Applied documentation: sample.py:first" in result.output
+    assert "Skipped documentation: sample.py" in result.output
