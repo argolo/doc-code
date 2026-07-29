@@ -9,7 +9,7 @@ from doc_gub import cli
 from doc_gub.cli import _loading, _model_for_attempt, _undocumented_symbols
 from doc_gub.config import Settings
 from doc_gub.errors import AIProviderError
-from doc_gub.symbols import Symbol
+from doc_gub.symbols import Symbol, discover, source_for_symbol
 
 
 def test_loading_reports_progress_when_stderr_is_not_a_terminal(
@@ -75,3 +75,43 @@ def test_apply_writes_each_file_before_later_generation_failures(
     assert second.read_text(encoding="utf-8") == second_source
     assert "Applied documentation: first.py" in result.output
     assert "Skipped documentation: second.py" in result.output
+
+
+def test_symbol_scope_contains_only_the_requested_python_function() -> None:
+    content = "def first():\n    return 1\n\ndef second():\n    return 2\n"
+    second = next(symbol for symbol in discover(content, ".py") if symbol.name == "second")
+
+    assert source_for_symbol(content, second, ".py") == "def second():\n    return 2\n"
+
+
+def test_symbol_request_scope_calls_the_model_once_per_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = '"""Module docs."""\n\ndef first():\n    return 1\n\ndef second():\n    return 2\n'
+    path = tmp_path / "sample.py"
+    path.write_text(source, encoding="utf-8")
+
+    class Repo:
+        def __init__(self) -> None:
+            self.root = tmp_path
+
+    settings = Settings(confirm=False, request_scope="symbol", models=("test",))
+    received: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["sample.py"])
+    monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
+
+    def fake_documentation(content: str, symbols: list[Symbol], _: Settings) -> dict[str, str]:
+        received.append((content, [symbol.name for symbol in symbols]))
+        return {symbol.name: "Generated docs." for symbol in symbols}
+
+    monkeypatch.setattr(cli, "documentation_for", fake_documentation)
+
+    result = CliRunner().invoke(cli.app, ["sample.py"])
+
+    assert result.exit_code == 0, result.output
+    assert received == [
+        ("def first():\n    return 1\n", ["first"]),
+        ("def second():\n    return 2\n", ["second"]),
+    ]
