@@ -36,3 +36,11 @@ def test_language_is_loaded_and_included_in_the_ai_prompt(tmp_path: Path) -> Non
 
     assert settings.language == "Portuguese"
     assert 'documentation text in "Portuguese"' in prompt("", symbols, settings.language)
+
+
+def test_request_scope_can_be_configured(tmp_path: Path) -> None:
+    (tmp_path / ".doc-gub.toml").write_text(
+        "[documentation]\nrequest_scope = 'symbol'\n", encoding="utf-8"
+    )
+
+    assert load(tmp_path).request_scope == "symbol"
