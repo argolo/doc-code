@@ -14,7 +14,7 @@ Em automações, use `--yes` junto com `--output apply`. Cada arquivo é gravado
 
 ```shell
 doc-gub                         # mudanças Git (staging tem prioridade)
-doc-gub src/                    # arquivo ou diretório específico
+doc-gub src/a.py src/b.ts       # um ou mais arquivos/diretórios específicos
 doc-gub --selection repository  # todos os arquivos elegíveis
 doc-gub --coverage all --format numpy
 doc-gub --language Portuguese
