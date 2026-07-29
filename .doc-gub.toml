@@ -21,5 +21,5 @@ confirm = false
 
 [limits]
 max_files_per_request = 50
-max_file_bytes = 100000
+max_file_bytes = 1000000
 exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js", "**/package-lock.json", "*.md", "*.toml", "CNAME", "Makefile", "LICENSE", ".venv"]
