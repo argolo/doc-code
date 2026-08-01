@@ -7,22 +7,24 @@ from urllib.error import URLError
 
 import pytest
 
-from doc_gub import ai
-from doc_gub.ai import _documentation_response, documentation_for, prompt
-from doc_gub.config import Settings, load
-from doc_gub.errors import (
+from doc_code import ai
+from doc_code.ai import _documentation_response, documentation_for, prompt
+from doc_code.config import Settings, load
+from doc_code.errors import (
     AIProviderError,
     AITimeoutError,
     DocGubError,
     InvalidAIResponseError,
 )
-from doc_gub.symbols import discover, needs_documentation
+from doc_code.symbols import discover, needs_documentation
 
 
 def test_config_precedence_and_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify config precedence and validation."""
-    (tmp_path / ".doc-gub.toml").write_text("[documentation]\ncoverage = 'all'\n", encoding="utf-8")
-    monkeypatch.setenv("DOC_GUB_COVERAGE", "minimal")
+    (tmp_path / ".doc-code.toml").write_text(
+        "[documentation]\ncoverage = 'all'\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("DOC_CODE_COVERAGE", "minimal")
 
     assert load(tmp_path, coverage="missing").coverage == "missing"
     assert load(tmp_path).coverage == "minimal"
@@ -32,18 +34,18 @@ def test_environment_values_are_converted_and_invalid_values_are_actionable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verify environment values are converted and invalid values are actionable."""
-    monkeypatch.setenv("DOC_GUB_CONFIRM", "false")
+    monkeypatch.setenv("DOC_CODE_CONFIRM", "false")
 
     assert load(tmp_path).confirm is False
 
-    monkeypatch.setenv("DOC_GUB_MAX_INPUT_TOKENS", "not-a-number")
+    monkeypatch.setenv("DOC_CODE_MAX_INPUT_TOKENS", "not-a-number")
     with pytest.raises(DocGubError, match="max_input_tokens.*positive integer"):
         load(tmp_path)
 
 
 def test_unknown_toml_options_are_reported_as_configuration_errors(tmp_path: Path) -> None:
     """Verify unknown toml options are reported as configuration errors."""
-    (tmp_path / ".doc-gub.toml").write_text("[ai]\nunknown = true\n", encoding="utf-8")
+    (tmp_path / ".doc-code.toml").write_text("[ai]\nunknown = true\n", encoding="utf-8")
 
     with pytest.raises(DocGubError, match=r"Unknown option\(s\).*\[ai\].*unknown"):
         load(tmp_path)
@@ -68,7 +70,7 @@ def test_model_and_endpoint_are_validated(
     tmp_path: Path, option: str, value: str, message: str
 ) -> None:
     """Verify model and endpoint are validated."""
-    (tmp_path / ".doc-gub.toml").write_text(f"[ai]\n{option} = {value!r}\n", encoding="utf-8")
+    (tmp_path / ".doc-code.toml").write_text(f"[ai]\n{option} = {value!r}\n", encoding="utf-8")
 
     with pytest.raises(DocGubError, match=message):
         load(tmp_path)
@@ -123,7 +125,7 @@ def test_authenticated_remote_endpoints_require_https(tmp_path: Path) -> None:
 
 def test_language_is_loaded_and_included_in_the_ai_prompt(tmp_path: Path) -> None:
     """Verify language is loaded and included in the ai prompt."""
-    (tmp_path / ".doc-gub.toml").write_text(
+    (tmp_path / ".doc-code.toml").write_text(
         "[documentation]\nlanguage = 'Portuguese'\n", encoding="utf-8"
     )
     settings = load(tmp_path)
@@ -135,7 +137,7 @@ def test_language_is_loaded_and_included_in_the_ai_prompt(tmp_path: Path) -> Non
 
 def test_request_scope_can_be_configured(tmp_path: Path) -> None:
     """Verify request scope can be configured."""
-    (tmp_path / ".doc-gub.toml").write_text(
+    (tmp_path / ".doc-code.toml").write_text(
         "[documentation]\nrequest_scope = 'symbol'\n", encoding="utf-8"
     )
 
