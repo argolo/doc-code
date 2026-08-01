@@ -16,7 +16,7 @@ from doc_gub.errors import (
     DocGubError,
     InvalidAIResponseError,
 )
-from doc_gub.symbols import discover
+from doc_gub.symbols import discover, needs_documentation
 
 
 def test_config_precedence_and_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,6 +74,23 @@ def test_model_and_endpoint_are_validated(
         load(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("provider", "temperature", "message"),
+    [
+        ("ollama", -0.1, "non-negative"),
+        ("openai", 2.1, "between 0 and 2"),
+    ],
+)
+def test_temperature_respects_provider_ranges(
+    tmp_path: Path, provider: str, temperature: float, message: str
+) -> None:
+    """Verify invalid sampling temperatures fail before a provider request."""
+    with pytest.raises(DocGubError, match=message):
+        load(tmp_path, provider=provider, temperature=temperature)
+
+    assert load(tmp_path, provider="ollama", temperature=3).temperature == 3
+
+
 def test_provider_defaults_and_explicit_model_precedence(tmp_path: Path) -> None:
     """Verify provider defaults and explicit model precedence."""
     openai = load(tmp_path, provider="openai")
@@ -83,6 +100,14 @@ def test_provider_defaults_and_explicit_model_precedence(tmp_path: Path) -> None
     assert openai.model == "gpt-5.6-sol"
     assert openai.model_candidates == ("gpt-5.6-sol",)
     assert explicit.model_candidates == ("custom-openai-model",)
+
+
+def test_an_empty_model_list_uses_the_primary_model(tmp_path: Path) -> None:
+    """Verify an explicit empty fallback list retains the configured primary model."""
+    settings = load(tmp_path, model="single-model", models=[])
+
+    assert settings.models == ()
+    assert settings.model_candidates == ("single-model",)
 
 
 def test_authenticated_remote_endpoints_require_https(tmp_path: Path) -> None:
@@ -115,6 +140,26 @@ def test_request_scope_can_be_configured(tmp_path: Path) -> None:
     )
 
     assert load(tmp_path).request_scope == "symbol"
+
+
+def test_minimal_coverage_targets_only_the_public_top_level_api() -> None:
+    """Verify minimal coverage differs from missing coverage in a predictable way."""
+    symbols = discover(
+        "def public():\n    pass\n\n"
+        "def _private():\n    pass\n\n"
+        "class Service:\n"
+        "    def method(self):\n"
+        "        pass\n",
+        ".py",
+    )
+
+    selected = [
+        symbol.name
+        for symbol in symbols
+        if needs_documentation(symbol, "minimal", "preserve")
+    ]
+
+    assert selected == ["module", "public", "Service"]
 
 
 def test_structured_ai_response_requires_argument_documentation() -> None:
@@ -155,6 +200,26 @@ def test_structured_ai_response_rejects_non_string_content() -> None:
 
     with pytest.raises(InvalidAIResponseError, match="invalid format"):
         _documentation_response(None, [symbol])  # type: ignore[arg-type]
+
+
+def test_structured_ai_response_rejects_empty_documentation_text() -> None:
+    """Verify whitespace-only descriptions and argument details are rejected."""
+    symbol = next(
+        symbol
+        for symbol in discover("def calculate(value):\n    return value\n", ".py")
+        if symbol.name == "calculate"
+    )
+
+    with pytest.raises(InvalidAIResponseError, match="non-empty"):
+        _documentation_response(
+            '{"calculate": {"description": "  ", "arguments": {"value": "Value."}}}',
+            [symbol],
+        )
+    with pytest.raises(InvalidAIResponseError, match="non-empty"):
+        _documentation_response(
+            '{"calculate": {"description": "Return a value.", "arguments": {"value": " "}}}',
+            [symbol],
+        )
 
 
 @pytest.mark.parametrize(
@@ -264,13 +329,46 @@ def test_post_converts_invalid_transport_response_to_domain_error(
             """Exit the response context."""
             return None
 
-        def read(self) -> bytes:
+        def read(self, _size: int = -1) -> bytes:
             """Read."""
             return b"[]"
 
     monkeypatch.setattr(ai, "urlopen", lambda *_args, **_kwargs: Response())
 
     with pytest.raises(AIProviderError, match="invalid response"):
+        ai._post("https://example.test", {}, {}, 1)
+
+
+def test_post_rejects_unsafe_endpoints_before_requesting_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify direct Settings construction cannot make non-HTTP requests."""
+    monkeypatch.setattr(ai, "urlopen", lambda *_args, **_kwargs: pytest.fail("unexpected request"))
+
+    with pytest.raises(AIProviderError, match="absolute HTTP"):
+        ai._post("file:///tmp/provider-response", {}, {}, 1)
+
+
+def test_post_rejects_oversized_provider_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify response size is bounded before JSON decoding."""
+    class Response:
+        """Provide an oversized response test double."""
+
+        def __enter__(self) -> Response:
+            """Enter the response context."""
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            """Exit the response context."""
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            """Return more bytes than the requested safe limit."""
+            return b"x" * size
+
+    monkeypatch.setattr(ai, "urlopen", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(AIProviderError, match="exceeds the supported size"):
         ai._post("https://example.test", {}, {}, 1)
 
 
