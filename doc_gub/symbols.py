@@ -345,7 +345,17 @@ def discover(content: str, suffix: str, filename: str = "<unknown>") -> list[Sym
 
 def eligible(symbol: Symbol, coverage: str) -> bool:
     """Return whether a symbol is eligible under the coverage policy."""
-    return coverage == "all" or not symbol.has_doc
+    if coverage == "all":
+        return True
+    if coverage == "minimal":
+        return (
+            not symbol.has_doc
+            and (
+                symbol.kind == "module"
+                or ("." not in symbol.name and not symbol.name.startswith("_"))
+            )
+        )
+    return not symbol.has_doc
 
 
 def needs_documentation(symbol: Symbol, coverage: str, existing_docs: str) -> bool:
@@ -363,9 +373,8 @@ def source_for_symbol(
 ) -> str:
     """Return the smallest self-contained source region available for one symbol.
 
-    Python symbols have AST-derived end lines. JavaScript discovery is intentionally lightweight, so
-    its region ends when its braces balance (or at a semicolon for expression-bodied arrow
-    functions). Module documentation remains file-scoped.
+    Python and JavaScript-family symbols use parser-derived ranges. Decorated Python declarations
+    include their decorators. Module documentation remains file-scoped.
     """
     if symbol.kind == "module":
         return _module_outline(content, suffix, filename)
@@ -471,6 +480,7 @@ def render(
         description = documentation
         argument_docs = {}
     description = " ".join(description.split()).strip() or f"Describe {symbol.name}."
+    description = description[:1].upper() + description[1:]
     if not description.endswith("."):
         description = description.rstrip("!?;:") + "."
     if suffix != ".py":
