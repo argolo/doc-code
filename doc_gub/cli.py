@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -13,7 +14,7 @@ import typer
 
 from .ai import documentation_for
 from .config import TEMPLATE, Settings, load
-from .editor import PreparedFile, apply, prepare
+from .editor import PreparedFile, apply, can_insert_documentation, prepare, validation_command
 from .errors import AIProviderError, AITimeoutError, DocGubError, InvalidAIResponseError
 from .git import GitRepo
 from .scope import resolve
@@ -22,6 +23,7 @@ from .symbols import Documentation, Symbol, discover, needs_documentation, sourc
 app = typer.Typer(add_completion=False, no_args_is_help=False)
 config_app = typer.Typer(help="Create and inspect doc-gub configuration.", no_args_is_help=True)
 MAX_AI_ATTEMPTS = 3
+_DUPLICATE_SYMBOL_SUFFIX = re.compile(r"^(?P<name>.+)@L\d+:\d+$")
 
 
 @contextmanager
@@ -44,7 +46,7 @@ def _loading(message: str):
 
 def _show(item: PreparedFile, model: str, elapsed: float, show_diff: bool = False) -> None:
     """Display a generation summary and optionally its unified diff."""
-    relative = item.path.as_posix()
+    relative = (item.display_path or item.path).as_posix()
     typer.echo()
     typer.secho(relative, fg=typer.colors.CYAN, bold=True)
     typer.echo(
@@ -80,6 +82,21 @@ def _show_check(missing: dict[str, list[str]]) -> None:
 def _model_for_attempt(candidates: tuple[str, ...], attempt: int) -> str:
     """Cycle configured fallback models instead of pinning later retries to the last one."""
     return candidates[(attempt - 1) % len(candidates)]
+
+
+def _symbol_identity(symbol: Symbol) -> tuple[str, str]:
+    """Return a symbol identity that remains stable when inserted lines shift it."""
+    match = _DUPLICATE_SYMBOL_SUFFIX.fullmatch(symbol.name)
+    name = match.group("name") if match else symbol.name
+    return name, symbol.kind
+
+
+def _symbol_occurrence(symbols: list[Symbol], target: Symbol) -> int | None:
+    """Return the ordinal needed to locate a duplicate symbol after an edit."""
+    matches = [symbol for symbol in symbols if _symbol_identity(symbol) == _symbol_identity(target)]
+    if len(matches) == 1:
+        return None
+    return matches.index(target)
 
 
 def _undocumented_symbols(content: str, suffix: str, filename: str = "<unknown>") -> list[str]:
@@ -223,25 +240,38 @@ def _apply_generated_symbol(
     target: Symbol,
     generated: dict[str, Documentation],
     settings: Settings,
+    occurrence: int | None = None,
 ) -> bool:
     """Apply one generated symbol against a freshly discovered source tree."""
     current_symbols = discover(_read_source(file_path), file_path.suffix, relative)
-    current_target = next(
-        (
+    if occurrence is None:
+        current_target = next(
+            (
+                symbol
+                for symbol in current_symbols
+                if symbol.name == target.name and symbol.kind == target.kind
+            ),
+            None,
+        )
+    else:
+        matches = [
             symbol
             for symbol in current_symbols
-            if symbol.name == target.name and symbol.kind == target.kind
-        ),
-        None,
-    )
+            if _symbol_identity(symbol) == _symbol_identity(target)
+        ]
+        current_target = matches[occurrence] if occurrence < len(matches) else None
     if current_target is None:
         raise DocGubError(f"{relative}: symbol `{target.name}` changed during generation.")
+    documentation = generated.get(target.name)
+    if documentation is None:
+        raise DocGubError(f"{relative}: missing generated documentation for `{target.name}`.")
     item = prepare(
         file_path,
         current_symbols,
-        generated,
+        {current_target.name: documentation},
         settings,
         selected_symbols=[current_target],
+        display_path=Path(relative),
     )
     if not item.diff:
         return False
@@ -269,7 +299,12 @@ def _generate_for_file(
         descriptions.update(generated)
         if settings.request_scope == "symbol" and settings.output == "apply":
             if _apply_generated_symbol(
-                file_path, relative, requested_symbols[0], generated, settings
+                file_path,
+                relative,
+                requested_symbols[0],
+                generated,
+                settings,
+                _symbol_occurrence(targets, requested_symbols[0]),
             ):
                 state.mark_completed(relative)
     return descriptions, candidate
@@ -295,19 +330,22 @@ def _process_file(
         symbol
         for symbol in symbols
         if needs_documentation(symbol, settings.coverage, settings.existing_docs)
+        and can_insert_documentation(content, symbol, file_path.suffix)
     ]
     if not targets:
-        item = prepare(file_path, symbols, {}, settings)
+        item = prepare(file_path, symbols, {}, settings, display_path=Path(relative))
         _show(item, "not used", 0, settings.output == "preview" and show_diff)
         return
     started = perf_counter()
     try:
+        if file_path.suffix != ".py":
+            validation_command(file_path.suffix, file_path)
         descriptions, candidate = _generate_for_file(
             file_path, relative, content, targets, settings, state
         )
         if settings.request_scope == "symbol" and settings.output == "apply":
             return
-        item = prepare(file_path, symbols, descriptions, settings)
+        item = prepare(file_path, symbols, descriptions, settings, display_path=Path(relative))
         _show(item, candidate, perf_counter() - started, settings.output == "preview" and show_diff)
         if settings.output == "apply" and item.diff:
             apply(item)
@@ -409,9 +447,6 @@ def doc_gub(
     except (DocGubError, UnicodeDecodeError, SyntaxError) as exc:
         message = _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
         typer.secho(f"Error: {message}", fg=typer.colors.RED, bold=True, err=True)
-        raise typer.Exit(1) from exc
-    except AIProviderError as exc:
-        typer.secho(f"Error: {exc}", fg=typer.colors.RED, bold=True, err=True)
         raise typer.Exit(1) from exc
 
 
