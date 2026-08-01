@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from doc_gub import editor
-from doc_gub.config import load
-from doc_gub.editor import apply, prepare
-from doc_gub.errors import DocGubError
-from doc_gub.symbols import Documentation, discover, source_for_symbol
+from doc_code import editor
+from doc_code.config import load
+from doc_code.editor import apply, prepare
+from doc_code.errors import DocGubError
+from doc_code.symbols import Documentation, discover, source_for_symbol
 
 
 @pytest.mark.parametrize(
