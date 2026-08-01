@@ -2,7 +2,7 @@
 
 `doc-gub` gera documentação para arquivos Python, JavaScript e TypeScript usando OpenAI, Gemini ou Ollama.
 
-Por padrão, ele mostra um resumo compacto da geração, sem despejar código no terminal. Para gravar, execute:
+Por padrão, ele mostra um diff revisável da documentação gerada. Use `--no-show-diff` para manter somente o resumo compacto. Para gravar, execute:
 
 ```shell
 doc-gub --output apply
@@ -19,7 +19,9 @@ doc-gub --selection repository  # todos os arquivos elegíveis
 doc-gub --coverage all --format numpy
 doc-gub --language Portuguese
 doc-gub --request-scope symbol
+doc-gub --no-show-diff          # prévia compacta, sem o diff unificado
 doc-gub --check                 # falha no CI se houver símbolos sem documentação
+doc-gub --continue-on-error     # aceita status 0 mesmo quando algum arquivo for ignorado
 doc-gub config init
 doc-gub config show
 ```
@@ -35,9 +37,9 @@ Crie um arquivo inicial com `doc-gub config init`. As seções `[ai]`, `[documen
 | Opção | Valores / padrão | Efeito |
 | --- | --- | --- |
 | `provider` | `openai`, `gemini` ou `ollama` · `ollama` | Seleciona o provedor que gera as descrições. |
-| `model` | string · `qwen2.5-coder:14b` | Modelo único usado quando `models` estiver vazio. |
+| `model` | string · depende do provedor | Modelo único usado quando `models` estiver vazio: `qwen2.5-coder:14b`, `gpt-5.6-sol` ou `gemini-3.6-flash`. |
 | `models` | lista de 1 a 3 strings · `qwen2.5-coder:14b`, `gemma4:e4b` | Candidatos usados em rotação nas tentativas; tem precedência sobre `model`. |
-| `endpoint` | URL ou ausência · endpoint padrão do provedor | Substitui o endpoint HTTP do provedor. |
+| `endpoint` | URL ou ausência · endpoint padrão do provedor | Substitui o endpoint do provedor. Provedores autenticados exigem HTTPS fora de loopback. |
 | `max_input_tokens` | inteiro positivo · `12000` | Limite estimado para o prompt enviado ao modelo. |
 | `context_window_tokens` | inteiro positivo · `32768` | Janela total do modelo; deve comportar entrada e saída. |
 | `max_output_tokens` | inteiro positivo · `800` | Limite de tokens da resposta gerada. |
@@ -73,7 +75,7 @@ Crie um arquivo inicial com `doc-gub config init`. As seções `[ai]`, `[documen
 
 As docstrings Python geradas seguem o PEP 257: resumos terminam em ponto, docstrings multilinha usam uma linha em branco antes e depois das seções e fecham as aspas em uma linha própria. Docstrings de módulo e classe são separadas da próxima declaração por uma linha em branco. As linhas vazias não recebem espaços de indentação.
 
-O comprimento de linha também segue o projeto-alvo. Para Python, o `doc-gub` usa `tool.ruff.line-length` do `pyproject.toml` mais próximo (ou 88 se não houver configuração). Para JavaScript e TypeScript, usa `max-len` do `eslint.config.js`, `eslint.config.mjs` ou `eslint.config.cjs` mais próximo (ou 100 sem regra). Descrições e linhas JSDoc são quebradas já considerando a indentação e os delimitadores.
+O comprimento de linha também segue o projeto-alvo. Para Python, o `doc-gub` usa `tool.ruff.line-length` e `tool.ruff.lint.pydocstyle.convention` do `pyproject.toml` mais próximo (ou 88 e o formato configurado no `doc-gub` quando ausentes). Resumos longos são separados da descrição por uma linha em branco, conforme D205. Para JavaScript e TypeScript, usa `max-len` do `eslint.config.js`, `eslint.config.mjs` ou `eslint.config.cjs` mais próximo (ou 100 sem regra). Descrições e linhas JSDoc são quebradas já considerando a indentação e os delimitadores.
 
 Os formatos `google`, `numpy` e `sphinx` controlam somente a seção de parâmetros. Para reescrever docstrings já existentes com esse padrão, use:
 
@@ -86,3 +88,5 @@ Para funções e métodos, o `doc-gub` solicita ao modelo uma descrição espec�
 Por padrão, `request_scope = "file"` envia o arquivo e todos os símbolos que precisam de geração em uma única requisição. Use `request_scope = "symbol"` (ou `--request-scope symbol`) para enviar cada símbolo em sua própria requisição, com apenas seu escopo de código. Isso reduz o contexto em arquivos grandes, mas pode aumentar latência e o número de chamadas. Para módulos, ele envia um índice estrutural — docstring inicial, imports, constantes e assinaturas públicas — sem os corpos. Nesse modo, o terminal exibe apenas o progresso e o item ativo (`3/10 arquivo:símbolo`); com `output = "apply"`, cada docstring é gravada imediatamente, preservando as conclusões anteriores se uma geração posterior falhar.
 
 Independentemente de `request_scope`, `existing_docs = "preserve"` impede qualquer chamada à IA para um módulo, classe, função ou método que já tenha docstring. `request_scope` altera somente a unidade de contexto enviada ao modelo; `existing_docs` decide se o símbolo é elegível. Para reescrever a documentação existente, combine `existing_docs = "replace"` com `coverage = "all"`.
+
+Falhas parciais retornam status 1 depois que os demais arquivos elegíveis são processados. Use `--continue-on-error` somente quando a automação aceitar explicitamente resultados parciais.
