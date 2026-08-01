@@ -67,24 +67,18 @@ def fase_da_lua(data: datetime | None = None) -> str:
     dias_decorridos = (data - referencia).total_seconds() / 86400
     ciclo = 29.53058867
     fase_dia = dias_decorridos % ciclo
-    if fase_dia < 1.84566:
-        return "Lua Nova"
-    elif fase_dia < 5.53699:
-        return "Lua Crescente"
-    elif fase_dia < 9.22831:
-        return "Quarto Crescente"
-    elif fase_dia < 12.91963:
-        return "Gibosa Crescente"
-    elif fase_dia < 16.61096:
-        return "Lua Cheia"
-    elif fase_dia < 20.30228:
-        return "Gibosa Minguante"
-    elif fase_dia < 23.99361:
-        return "Quarto Minguante"
-    elif fase_dia < 27.68493:
-        return "Lua Minguante"
-    else:
-        return "Lua Nova"
+    fases = (
+        (1.84566, "Lua Nova"),
+        (5.53699, "Lua Crescente"),
+        (9.22831, "Quarto Crescente"),
+        (12.91963, "Gibosa Crescente"),
+        (16.61096, "Lua Cheia"),
+        (20.30228, "Gibosa Minguante"),
+        (23.99361, "Quarto Minguante"),
+        (27.68493, "Lua Minguante"),
+        (ciclo, "Lua Nova"),
+    )
+    return next(nome for limite, nome in fases if fase_dia < limite)
 
 
 async def async_eh_primo(numero: int) -> bool:
