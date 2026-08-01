@@ -150,9 +150,11 @@ def documentation_for(
 
 def _documentation_response(answer: str, symbols: list[Symbol]) -> dict[str, Documentation]:
     """Validate and normalize the structured documentation returned by a provider."""
+    if not isinstance(answer, str):
+        raise InvalidAIResponseError("The AI returned documentation in an invalid format.")
     try:
         parsed = json.loads(answer)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, TypeError) as exc:
         raise InvalidAIResponseError("The AI returned invalid documentation JSON.") from exc
     if not isinstance(parsed, dict):
         raise InvalidAIResponseError("The AI response must be a JSON object of documentation.")
