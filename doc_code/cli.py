@@ -15,7 +15,13 @@ import typer
 from .ai import documentation_for
 from .config import TEMPLATE, Settings, load
 from .editor import PreparedFile, apply, can_insert_documentation, prepare, validation_command
-from .errors import AIProviderError, AITimeoutError, DocGubError, InvalidAIResponseError
+from .errors import (
+    AIProviderError,
+    AITimeoutError,
+    DocGubError,
+    InvalidAIResponseError,
+    NoEligibleFilesError,
+)
 from .git import GitRepo
 from .scope import resolve
 from .symbols import Documentation, Symbol, discover, needs_documentation, source_for_symbol
@@ -434,7 +440,18 @@ def doc_code(
             max_input_tokens=max_input_tokens,
             context_window_tokens=context_window_tokens,
         )
-        files = resolve(repo, paths, settings)
+        try:
+            files = resolve(repo, paths, settings)
+        except NoEligibleFilesError:
+            if check:
+                raise
+            typer.secho(
+                "Nothing to document: no eligible source files were found. "
+                "The selected scope may already be fully documented or contain no supported "
+                "changes.",
+                fg=typer.colors.GREEN,
+            )
+            return
         if check:
             _run_check(repo, files)
             return
