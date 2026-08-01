@@ -32,8 +32,8 @@ jobs:
           cache-dependency-glob: uv.lock
       - run: uv sync --locked --all-extras --python "${{ matrix.python-version }}"
       - run: uv run ruff check .
-      - run: uv run mypy doc_gub tests
-      - run: uv run pytest --cov=doc_gub --cov-report=term-missing
+      - run: uv run mypy doc_code tests
+      - run: uv run pytest --cov=doc_code --cov-report=term-missing
       - if: matrix.python-version == '3.11'
         run: uv run python -m build
       - if: matrix.python-version == '3.11'
@@ -41,7 +41,7 @@ jobs:
         run: |
           uv pip install --python .venv/bin/python --reinstall --no-deps dist/*.whl
           uv pip check --python .venv/bin/python
-          .venv/bin/doc-gub --help
+          .venv/bin/doc-code --help
       - if: matrix.python-version == '3.11'
         run: uv run python -m pip_audit --local --skip-editable
 
@@ -60,6 +60,6 @@ jobs:
           cache-dependency-glob: uv.lock
       - run: uv sync --locked --all-extras --python 3.11
       - run: uv run ruff check .
-      - run: uv run mypy doc_gub tests
-      - run: uv run pytest --cov=doc_gub --cov-report=term-missing
-      - run: uv run doc-gub --help
+      - run: uv run mypy doc_code tests
+      - run: uv run pytest --cov=doc_code --cov-report=term-missing
+      - run: uv run doc-code --help
