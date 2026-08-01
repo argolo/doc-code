@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 from doc_code import cli
 from doc_code.cli import _loading, _model_for_attempt, _undocumented_symbols
 from doc_code.config import Settings
-from doc_code.errors import AIProviderError, AITimeoutError, DocGubError
+from doc_code.errors import AIProviderError, AITimeoutError, DocGubError, NoEligibleFilesError
 from doc_code.symbols import Documentation, Symbol, discover, source_for_symbol
 
 
@@ -140,6 +140,32 @@ def test_generation_skips_invalid_files_and_continues_the_scope(
 
     continued = CliRunner().invoke(cli.app, ["--continue-on-error", "broken.py", "valid.py"])
     assert continued.exit_code == 0, continued.output
+
+
+def test_generation_treats_an_empty_scope_as_a_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify no eligible files is informative rather than an error outside CI checks."""
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: Settings(confirm=False))
+    monkeypatch.setattr(
+        cli,
+        "resolve",
+        lambda *_args: (_ for _ in ()).throw(NoEligibleFilesError("empty scope")),
+    )
+
+    result = CliRunner().invoke(cli.app, [])
+
+    assert result.exit_code == 0, result.output
+    assert "Nothing to document" in result.output
+    assert "Error:" not in result.output
 
 
 def test_apply_writes_each_file_before_later_generation_failures(
