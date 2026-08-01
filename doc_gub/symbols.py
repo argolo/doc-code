@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import ast
 import textwrap
+from collections import Counter, defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from tree_sitter import Language, Node, Parser
 from tree_sitter_javascript import language as javascript_language
@@ -14,11 +15,7 @@ from tree_sitter_typescript import language_tsx, language_typescript
 
 @dataclass(frozen=True)
 class Symbol:
-    """Store metadata for a source symbol.
-
-    Uma classe de dados imutável usada para armazenar metadados sobre um símbolo (módulo, classe
-    ou função) encontrado no código fonte.
-    """
+    """Store immutable metadata for a source symbol."""
 
     name: str
     kind: str
@@ -38,6 +35,23 @@ class Documentation:
 
     description: str
     arguments: Mapping[str, str] = field(default_factory=dict)
+
+
+def _unique_symbol_names(symbols: list[Symbol]) -> list[Symbol]:
+    """Disambiguate valid redefinitions without changing already unique public names."""
+    totals = Counter(symbol.name for symbol in symbols)
+    occurrences: defaultdict[tuple[str, int], int] = defaultdict(int)
+    normalized: list[Symbol] = []
+    for symbol in symbols:
+        if totals[symbol.name] == 1:
+            normalized.append(symbol)
+            continue
+        location = (symbol.name, symbol.line)
+        occurrences[location] += 1
+        normalized.append(
+            replace(symbol, name=f"{symbol.name}@L{symbol.line}:{occurrences[location]}")
+        )
+    return normalized
 
 
 def _statement_start_line(node: ast.stmt) -> int:
@@ -74,15 +88,7 @@ def _python_arguments(arguments: ast.arguments) -> tuple[str, ...]:
 
 
 def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
-    """Discover symbols in Python source code.
-
-    Analisa uma string de conteúdo Python e retorna uma lista de objetos Symbol que representam
-    os símbolos definidos.
-
-    Args:
-        content: Description of content.
-        filename: Name reported when Python parsing fails.
-    """
+    """Discover module, class, and function symbols in Python source."""
     tree = ast.parse(content, filename=filename)
     lines = content.splitlines()
     found: list[Symbol] = []
@@ -102,15 +108,7 @@ def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
     )
 
     def visit(nodes: list[ast.stmt], prefix: str = "") -> None:
-        """Visit nested Python AST nodes recursively.
-
-        Função auxiliar recursiva usada para percorrer nós AST e identificar símbolos aninhados
-        (como métodos ou classes internas).
-
-        Args:
-            nodes: Description of nodes.
-            prefix: Description of prefix.
-        """
+        """Visit nested Python declarations recursively."""
         for node in nodes:
             if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -141,7 +139,7 @@ def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
             visit(node.body, name)
 
     visit(tree.body)
-    return found
+    return _unique_symbol_names(found)
 
 
 _JAVASCRIPT = Language(javascript_language())
@@ -217,6 +215,112 @@ def _raise_javascript_syntax_error(root: Node, content: str, filename: str) -> N
     )
 
 
+class _JavaScriptSymbolVisitor:
+    """Collect documentable declarations from a tree-sitter syntax tree."""
+
+    def __init__(self, source: bytes, lines: list[str]) -> None:
+        """Initialize the visitor with shared source context."""
+        self.source = source
+        self.lines = lines
+        self.found: list[Symbol] = []
+
+    @staticmethod
+    def _qualified(prefix: str, name: str) -> str:
+        """Return a name qualified by its enclosing declaration."""
+        return f"{prefix}.{name}" if prefix else name
+
+    def _append(self, node: Node, name: str, kind: str, parameters: Node | None = None) -> None:
+        """Append one symbol using this visitor's shared source context."""
+        self.found.append(_javascript_symbol(node, name, kind, parameters, self.source, self.lines))
+
+    def visit(self, node: Node, prefix: str = "") -> None:
+        """Visit a syntax node and its relevant descendants."""
+        declaration = node
+        if node.type == "export_statement":
+            declaration = node.child_by_field_name("declaration") or node
+        if declaration.type == "class_declaration":
+            self._visit_class(declaration, prefix)
+            return
+        if declaration.type in {"function_declaration", "generator_function_declaration"}:
+            self._visit_function(declaration, prefix)
+            return
+        if declaration.type == "lexical_declaration":
+            self._visit_lexical(declaration, prefix)
+            return
+        for child in node.named_children:
+            self.visit(child, prefix)
+
+    def _visit_class(self, node: Node, prefix: str) -> None:
+        """Record a class and visit its members."""
+        raw_name = _node_text(node.child_by_field_name("name"), self.source)
+        name = self._qualified(prefix, raw_name)
+        self._append(node, name, "class")
+        body = node.child_by_field_name("body")
+        if not body:
+            return
+        for child in body.named_children:
+            self._visit_class_member(child, name)
+
+    def _visit_class_member(self, node: Node, class_name: str) -> None:
+        """Record methods and arrow fields, or recurse into other members."""
+        if node.type == "method_definition":
+            self._visit_method(node, class_name)
+        elif node.type == "public_field_definition":
+            self._visit_public_field(node, class_name)
+        else:
+            self.visit(node, class_name)
+
+    def _visit_method(self, node: Node, class_name: str) -> None:
+        """Record a class method and visit declarations in its body."""
+        method_name = _node_text(node.child_by_field_name("name"), self.source)
+        name = f"{class_name}.{method_name}"
+        self._append(node, name, "function", node.child_by_field_name("parameters"))
+        for descendant in node.named_children:
+            self.visit(descendant, name)
+
+    def _visit_public_field(self, node: Node, class_name: str) -> None:
+        """Record a public class field when its value is an arrow function."""
+        value = node.child_by_field_name("value")
+        if not value or value.type != "arrow_function":
+            return
+        field_name = _node_text(node.child_by_field_name("name"), self.source)
+        name = f"{class_name}.{field_name}"
+        parameters = value.child_by_field_name("parameters") or value.child_by_field_name(
+            "parameter"
+        )
+        self._append(node, name, "function", parameters)
+        for descendant in value.named_children:
+            self.visit(descendant, name)
+
+    def _visit_function(self, node: Node, prefix: str) -> None:
+        """Record a function declaration and visit its body."""
+        raw_name = _node_text(node.child_by_field_name("name"), self.source)
+        name = self._qualified(prefix, raw_name)
+        self._append(node, name, "function", node.child_by_field_name("parameters"))
+        body = node.child_by_field_name("body")
+        if body:
+            self.visit(body, name)
+
+    def _visit_lexical(self, node: Node, prefix: str) -> None:
+        """Record arrow functions declared with ``let`` or ``const``."""
+        for declarator in node.named_children:
+            self._visit_declarator(declarator, prefix)
+
+    def _visit_declarator(self, node: Node, prefix: str) -> None:
+        """Record one arrow-function variable declarator."""
+        value = node.child_by_field_name("value")
+        if node.type != "variable_declarator" or not value or value.type != "arrow_function":
+            return
+        raw_name = _node_text(node.child_by_field_name("name"), self.source)
+        name = self._qualified(prefix, raw_name)
+        parameters = value.child_by_field_name("parameters") or value.child_by_field_name(
+            "parameter"
+        )
+        self._append(node, name, "function", parameters)
+        for descendant in value.named_children:
+            self.visit(descendant, name)
+
+
 def javascript_symbols(
     content: str, suffix: str = ".js", filename: str = "<unknown>"
 ) -> list[Symbol]:
@@ -225,113 +329,13 @@ def javascript_symbols(
     language = _TSX if suffix == ".tsx" else _TYPESCRIPT if suffix == ".ts" else _JAVASCRIPT
     tree = Parser(language).parse(source)
     _raise_javascript_syntax_error(tree.root_node, content, filename)
-    lines = content.splitlines()
-    found: list[Symbol] = []
-
-    def visit(node: Node, prefix: str = "") -> None:
-        """Visita um nó e registra os símbolos JavaScript encontrados.
-
-        Anexa o prefixo de escopo fornecido ao nome de cada símbolo.
-
-        Args:
-            node: O nó AST a ser visitado.
-            prefix: O prefixo de escopo para os nomes dos símbolos encontrados.
-        """
-        declaration = node
-        if node.type == "export_statement":
-            declaration = node.child_by_field_name("declaration") or node
-        if declaration.type == "class_declaration":
-            raw_name = _node_text(declaration.child_by_field_name("name"), source)
-            name = f"{prefix}.{raw_name}" if prefix else raw_name
-            found.append(_javascript_symbol(declaration, name, "class", None, source, lines))
-            body = declaration.child_by_field_name("body")
-            if body:
-                for child in body.named_children:
-                    if child.type == "method_definition":
-                        method_name = _node_text(child.child_by_field_name("name"), source)
-                        found.append(
-                            _javascript_symbol(
-                                child,
-                                f"{name}.{method_name}",
-                                "function",
-                                child.child_by_field_name("parameters"),
-                                source,
-                                lines,
-                            )
-                        )
-                        for descendant in child.named_children:
-                            visit(descendant, name)
-                    elif child.type == "public_field_definition":
-                        value = child.child_by_field_name("value")
-                        if value and value.type == "arrow_function":
-                            field_name = _node_text(child.child_by_field_name("name"), source)
-                            found.append(
-                                _javascript_symbol(
-                                    child,
-                                    f"{name}.{field_name}",
-                                    "function",
-                                    value.child_by_field_name("parameters")
-                                    or value.child_by_field_name("parameter"),
-                                    source,
-                                    lines,
-                                )
-                            )
-                    else:
-                        visit(child, name)
-            return
-        if declaration.type in {"function_declaration", "generator_function_declaration"}:
-            raw_name = _node_text(declaration.child_by_field_name("name"), source)
-            found.append(
-                _javascript_symbol(
-                    declaration,
-                    f"{prefix}.{raw_name}" if prefix else raw_name,
-                    "function",
-                    declaration.child_by_field_name("parameters"),
-                    source,
-                    lines,
-                )
-            )
-            return
-        if declaration.type == "lexical_declaration":
-            for declarator in declaration.named_children:
-                value = declarator.child_by_field_name("value")
-                if (
-                    declarator.type == "variable_declarator"
-                    and value
-                    and value.type == "arrow_function"
-                ):
-                    raw_name = _node_text(declarator.child_by_field_name("name"), source)
-                    name = f"{prefix}.{raw_name}" if prefix else raw_name
-                    found.append(
-                        _javascript_symbol(
-                            declarator,
-                            name,
-                            "function",
-                            value.child_by_field_name("parameters")
-                            or value.child_by_field_name("parameter"),
-                            source,
-                            lines,
-                        )
-                    )
-            return
-        for child in node.named_children:
-            visit(child, prefix)
-
-    visit(tree.root_node)
-    return found
+    visitor = _JavaScriptSymbolVisitor(source, content.splitlines())
+    visitor.visit(tree.root_node)
+    return _unique_symbol_names(visitor.found)
 
 
 def discover(content: str, suffix: str, filename: str = "<unknown>") -> list[Symbol]:
-    """Select symbol discovery based on the file suffix.
-
-    Determina qual função de análise de símbolos deve ser utilizada (`python` ou `javascript`)
-    com base na extensão do arquivo fornecida.
-
-    Args:
-        content: Description of content.
-        suffix: Description of suffix.
-        filename: Name reported when Python parsing fails.
-    """
+    """Select Python or JavaScript-family symbol discovery by suffix."""
     return (
         python_symbols(content, filename)
         if suffix == ".py"
@@ -340,15 +344,7 @@ def discover(content: str, suffix: str, filename: str = "<unknown>") -> list[Sym
 
 
 def eligible(symbol: Symbol, coverage: str) -> bool:
-    """Return whether a symbol needs documentation.
-
-    Verifica se um símbolo é considerado elegível para documentação, geralmente baseado em
-    critérios de cobertura de testes ('all').
-
-    Args:
-        symbol: Description of symbol.
-        coverage: Description of coverage.
-    """
+    """Return whether a symbol is eligible under the coverage policy."""
     return coverage == "all" or not symbol.has_doc
 
 
@@ -467,19 +463,7 @@ def render(
     line_length: int = 100,
     indentation: str = "",
 ) -> str:
-    """Render documentation for a source symbol.
-
-    Formata a descrição textual de um símbolo (docstring) no formato apropriado, seja ele Python
-    docstrings ou JSDoc.
-
-    Args:
-        symbol: Description of symbol.
-        documentation: Description of the symbol and, optionally, its arguments.
-        suffix: Description of suffix.
-        python_format: Description of python_format.
-        line_length: Maximum allowed line length for the target project.
-        indentation: Indentation that will precede the rendered documentation.
-    """
+    """Render a PEP 257 docstring or JSDoc block for a source symbol."""
     if isinstance(documentation, Documentation):
         description = documentation.description
         argument_docs = documentation.arguments
@@ -527,14 +511,54 @@ def _python_docstring(content: str, line_length: int, indentation: str) -> str:
     if "\n" not in escaped and len(escaped) <= single_line_width:
         return f'"""{escaped}"""'
 
+    source_rows = escaped.splitlines()
+    first_line_width = max(line_length - len(indentation) - 3, 20)
+    summary, detail = _split_docstring_summary(source_rows[0], first_line_width)
+    logical_rows = [summary]
+    if detail:
+        logical_rows.extend(("", detail))
+    logical_rows.extend(source_rows[1:])
+
     rows: list[str] = []
-    for index, row in enumerate(escaped.splitlines()):
+    for index, row in enumerate(logical_rows):
         if not row:
             rows.append("")
             continue
         available = line_length - len(indentation) - (3 if index == 0 else 0)
         rows.extend(_wrap_documentation_line(row, max(available, 20)))
     return '"""' + "\n".join(rows) + '\n\n"""'
+
+
+def _split_docstring_summary(content: str, width: int) -> tuple[str, str | None]:
+    """Split an overlong summary into a PEP 257 summary and detailed description."""
+    if len(content) <= width:
+        return content, None
+    split_at = _summary_split_index(content, width)
+    summary = content[:split_at].rstrip(" ,;:")
+    detail = content[split_at:].lstrip(" ,;:")
+    if not summary.endswith((".", "?", "!")):
+        summary = summary.rstrip("?!") + "."
+    if detail:
+        detail = detail[:1].upper() + detail[1:]
+    return summary, detail or None
+
+
+def _summary_split_index(content: str, width: int) -> int:
+    """Choose a readable boundary that leaves room for summary punctuation."""
+    usable_width = max(width - 1, 10)
+    minimum = min(max(usable_width // 3, 12), usable_width)
+    for index, character in enumerate(content[:usable_width]):
+        if index >= minimum and character in ".!?" and content[index + 1 : index + 2] == " ":
+            return index + 1
+    clause = max(content.rfind(mark, minimum, usable_width) for mark in (",", ";", ":"))
+    if clause >= minimum:
+        return clause
+    for conjunction in (" and ", " or ", " that ", " which ", " while ", " e ", " que "):
+        boundary = content.rfind(conjunction, minimum, usable_width)
+        if boundary >= minimum:
+            return boundary + 1
+    boundary = content.rfind(" ", minimum, usable_width)
+    return boundary if boundary >= minimum else usable_width
 
 
 def _argument_description(argument: str, descriptions: Mapping[str, str]) -> str:
