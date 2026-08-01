@@ -5,19 +5,19 @@ from __future__ import annotations
 import json
 import sys
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
 
 import typer
 
 from .ai import documentation_for
-from .config import TEMPLATE, load
+from .config import TEMPLATE, Settings, load
 from .editor import PreparedFile, apply, prepare
 from .errors import AIProviderError, AITimeoutError, DocGubError, InvalidAIResponseError
 from .git import GitRepo
 from .scope import resolve
-from .symbols import Documentation, discover, needs_documentation, source_for_symbol
+from .symbols import Documentation, Symbol, discover, needs_documentation, source_for_symbol
 
 app = typer.Typer(add_completion=False, no_args_is_help=False)
 config_app = typer.Typer(help="Create and inspect doc-gub configuration.", no_args_is_help=True)
@@ -42,17 +42,8 @@ def _loading(message: str):
             typer.echo("\r" + " " * len(message) + "\r", nl=False, err=True)
 
 
-def _show(item: PreparedFile, model: str, elapsed: float) -> None:
-    """Display a documentation generation summary.
-
-    Exibe um resumo factual sobre os resultados da geração de documentação (arquivos, símbolos,
-    tempo).
-
-    Args:
-        item: Description of item.
-        model: Description of model.
-        elapsed: Description of elapsed.
-    """
+def _show(item: PreparedFile, model: str, elapsed: float, show_diff: bool = False) -> None:
+    """Display a generation summary and optionally its unified diff."""
     relative = item.path.as_posix()
     typer.echo()
     typer.secho(relative, fg=typer.colors.CYAN, bold=True)
@@ -63,6 +54,8 @@ def _show(item: PreparedFile, model: str, elapsed: float) -> None:
     typer.echo(f"Model: {model} | Generated in {elapsed:.2f}s")
     if item.diff:
         typer.secho("Status: documentation changes generated.", fg=typer.colors.GREEN)
+        if show_diff:
+            typer.echo(item.diff, nl=not item.diff.endswith("\n"))
     else:
         typer.secho("No documentation changes needed.", fg=typer.colors.BRIGHT_BLACK)
 
@@ -105,6 +98,239 @@ def _syntax_error_message(exc: SyntaxError) -> str:
     return f"{message}\n  {source}\n  {' ' * column}^"
 
 
+def _read_source(path: Path) -> str:
+    """Read UTF-8 source and convert filesystem failures to domain errors."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise DocGubError(f"Unable to read source file {path}: {exc}") from exc
+
+
+@dataclass
+class _RunState:
+    """Track file-level results across an incremental run."""
+
+    completed: list[str]
+    skipped: list[str]
+
+    def mark_completed(self, relative: str) -> None:
+        """Record an applied file once."""
+        if relative not in self.completed:
+            self.completed.append(relative)
+
+    def mark_skipped(self, relative: str, reason: str) -> None:
+        """Record and display a file-level failure."""
+        self.skipped.append(relative)
+        _show_skipped(relative, reason)
+
+
+def _run_check(repo: GitRepo, files: list[str]) -> None:
+    """Inspect selected files without calling an AI provider."""
+    missing: dict[str, list[str]] = {}
+    inspection_failures: list[str] = []
+    for relative in files:
+        try:
+            content = _read_source(repo.root / relative)
+            undocumented = _undocumented_symbols(content, Path(relative).suffix, relative)
+        except (DocGubError, UnicodeDecodeError, SyntaxError) as exc:
+            inspection_failures.append(relative)
+            reason = _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
+            _show_skipped(relative, reason)
+            continue
+        if undocumented:
+            missing[relative] = undocumented
+    if not missing and not inspection_failures:
+        _show_check({})
+        return
+    if missing:
+        _show_check(missing)
+    if inspection_failures:
+        typer.secho(
+            f"Documentation check could not inspect {len(inspection_failures)} file(s).",
+            fg=typer.colors.RED,
+        )
+    raise typer.Exit(1)
+
+
+def _confirm_application(settings: Settings, files: list[str], yes: bool) -> bool:
+    """Request one global confirmation before incremental application."""
+    if settings.output != "apply" or not settings.confirm or yes:
+        return True
+    if not sys.stdin.isatty():
+        raise DocGubError(
+            "Confirmation requires an interactive terminal; use --yes for automation."
+        )
+    confirmed = typer.confirm(
+        f"Apply documentation as each of {len(files)} file(s) completes?", default=False
+    )
+    if not confirmed:
+        typer.secho("Cancelled.", fg=typer.colors.YELLOW)
+    return confirmed
+
+
+def _request_batches(
+    content: str,
+    targets: list[Symbol],
+    path: Path,
+    relative: str,
+    settings: Settings,
+) -> list[tuple[str, list[Symbol]]]:
+    """Build file- or symbol-scoped provider requests."""
+    if settings.request_scope == "file":
+        return [(content, targets)]
+    return [
+        (source_for_symbol(content, symbol, path.suffix, relative), [symbol]) for symbol in targets
+    ]
+
+
+def _request_documentation(
+    source: str,
+    symbols: list[Symbol],
+    settings: Settings,
+    label: str,
+) -> tuple[dict[str, Documentation], str]:
+    """Request documentation with bounded, model-cycling retries."""
+    candidates = settings.model_candidates
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_AI_ATTEMPTS + 1):
+        candidate = _model_for_attempt(candidates, attempt)
+        try:
+            with _loading(
+                f"Generating docs [{label}] | model: {candidate} ({attempt}/{MAX_AI_ATTEMPTS})..."
+            ):
+                generated = documentation_for(
+                    source,
+                    symbols,
+                    replace(settings, model=candidate, models=()),
+                )
+            return generated, candidate
+        except (AIProviderError, InvalidAIResponseError) as exc:
+            last_error = exc
+            if attempt < MAX_AI_ATTEMPTS:
+                next_model = _model_for_attempt(candidates, attempt + 1)
+                reason = "AI request timed out" if isinstance(exc, AITimeoutError) else str(exc)
+                typer.secho(
+                    f"{reason} with model [{candidate}]. Retrying with model "
+                    f"[{next_model}] ({attempt + 1}/{MAX_AI_ATTEMPTS})...",
+                    fg=typer.colors.YELLOW,
+                )
+    raise AIProviderError(f"generation failed after {MAX_AI_ATTEMPTS} attempts: {last_error}")
+
+
+def _apply_generated_symbol(
+    file_path: Path,
+    relative: str,
+    target: Symbol,
+    generated: dict[str, Documentation],
+    settings: Settings,
+) -> bool:
+    """Apply one generated symbol against a freshly discovered source tree."""
+    current_symbols = discover(_read_source(file_path), file_path.suffix, relative)
+    current_target = next(
+        (
+            symbol
+            for symbol in current_symbols
+            if symbol.name == target.name and symbol.kind == target.kind
+        ),
+        None,
+    )
+    if current_target is None:
+        raise DocGubError(f"{relative}: symbol `{target.name}` changed during generation.")
+    item = prepare(
+        file_path,
+        current_symbols,
+        generated,
+        settings,
+        selected_symbols=[current_target],
+    )
+    if not item.diff:
+        return False
+    apply(item)
+    return True
+
+
+def _generate_for_file(
+    file_path: Path,
+    relative: str,
+    content: str,
+    targets: list[Symbol],
+    settings: Settings,
+    state: _RunState,
+) -> tuple[dict[str, Documentation], str]:
+    """Generate every request for one file, applying symbol-scoped results incrementally."""
+    requests = _request_batches(content, targets, file_path, relative, settings)
+    descriptions: dict[str, Documentation] = {}
+    candidate = settings.model
+    for number, (source, requested_symbols) in enumerate(requests, start=1):
+        label = relative
+        if settings.request_scope == "symbol":
+            label = f"{number}/{len(requests)} {relative}:{requested_symbols[0].name}"
+        generated, candidate = _request_documentation(source, requested_symbols, settings, label)
+        descriptions.update(generated)
+        if settings.request_scope == "symbol" and settings.output == "apply":
+            if _apply_generated_symbol(
+                file_path, relative, requested_symbols[0], generated, settings
+            ):
+                state.mark_completed(relative)
+    return descriptions, candidate
+
+
+def _process_file(
+    repo: GitRepo,
+    relative: str,
+    settings: Settings,
+    show_diff: bool,
+    state: _RunState,
+) -> None:
+    """Discover, generate, validate, and optionally apply documentation for one file."""
+    file_path = repo.root / relative
+    try:
+        content = _read_source(file_path)
+        symbols = discover(content, file_path.suffix, relative)
+    except (DocGubError, UnicodeDecodeError, SyntaxError) as exc:
+        reason = _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
+        state.mark_skipped(relative, reason)
+        return
+    targets = [
+        symbol
+        for symbol in symbols
+        if needs_documentation(symbol, settings.coverage, settings.existing_docs)
+    ]
+    if not targets:
+        item = prepare(file_path, symbols, {}, settings)
+        _show(item, "not used", 0, settings.output == "preview" and show_diff)
+        return
+    started = perf_counter()
+    try:
+        descriptions, candidate = _generate_for_file(
+            file_path, relative, content, targets, settings, state
+        )
+        if settings.request_scope == "symbol" and settings.output == "apply":
+            return
+        item = prepare(file_path, symbols, descriptions, settings)
+        _show(item, candidate, perf_counter() - started, settings.output == "preview" and show_diff)
+        if settings.output == "apply" and item.diff:
+            apply(item)
+            state.mark_completed(relative)
+            typer.secho(f"Applied documentation: {relative}", fg=typer.colors.GREEN)
+    except DocGubError as exc:
+        state.mark_skipped(relative, str(exc))
+
+
+def _finish_run(settings: Settings, state: _RunState, continue_on_error: bool) -> None:
+    """Display aggregate results and enforce the partial-failure exit policy."""
+    if settings.output == "apply":
+        typer.secho(
+            f"Documentation applied to {len(state.completed)} file(s).",
+            fg=typer.colors.GREEN,
+            bold=True,
+        )
+    if state.skipped:
+        typer.secho(f"Skipped files: {len(state.skipped)}", fg=typer.colors.YELLOW, bold=True)
+        if not continue_on_error:
+            raise typer.Exit(1)
+
+
 @app.command()
 def doc_gub(
     paths: list[Path] = typer.Argument(
@@ -118,6 +344,16 @@ def doc_gub(
         False,
         "--check",
         help="Exit with status 1 when eligible symbols are undocumented; never calls AI.",
+    ),
+    continue_on_error: bool = typer.Option(
+        False,
+        "--continue-on-error",
+        help="Return status 0 after partial failures when other files can still be processed.",
+    ),
+    show_diff: bool = typer.Option(
+        True,
+        "--show-diff/--no-show-diff",
+        help="Show generated unified diffs in preview mode.",
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip global confirmation when applying."),
     coverage: str | None = typer.Option(None, "--coverage", help="missing, minimal, or all."),
@@ -162,184 +398,14 @@ def doc_gub(
         )
         files = resolve(repo, paths, settings)
         if check:
-            missing: dict[str, list[str]] = {}
-            inspection_failures: list[str] = []
-            for relative in files:
-                try:
-                    content = (repo.root / relative).read_text(encoding="utf-8")
-                    undocumented = _undocumented_symbols(content, Path(relative).suffix, relative)
-                except (UnicodeDecodeError, SyntaxError) as exc:
-                    inspection_failures.append(relative)
-                    reason = (
-                        _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
-                    )
-                    _show_skipped(relative, reason)
-                    continue
-                if undocumented:
-                    missing[relative] = undocumented
-            if missing or inspection_failures:
-                if missing:
-                    _show_check(missing)
-                if inspection_failures:
-                    typer.secho(
-                        "Documentation check could not inspect "
-                        f"{len(inspection_failures)} file(s).",
-                        fg=typer.colors.RED,
-                    )
-                raise typer.Exit(1)
-            _show_check({})
+            _run_check(repo, files)
             return
-        if settings.output == "apply" and settings.confirm and not yes:
-            if not sys.stdin.isatty():
-                raise DocGubError(
-                    "Confirmation requires an interactive terminal; use --yes for automation."
-                )
-            if not typer.confirm(
-                f"Apply documentation as each of {len(files)} file(s) completes?", default=False
-            ):
-                typer.secho("Cancelled.", fg=typer.colors.YELLOW)
-                return
-
-        completed: list[str] = []
-        skipped: list[str] = []
+        if not _confirm_application(settings, files, yes):
+            return
+        state = _RunState([], [])
         for relative in files:
-            file_path = repo.root / relative
-            try:
-                content = file_path.read_text(encoding="utf-8")
-                symbols = discover(content, file_path.suffix, relative)
-            except (UnicodeDecodeError, SyntaxError) as exc:
-                skipped.append(relative)
-                reason = _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
-                _show_skipped(relative, reason)
-                continue
-            targets = [
-                symbol
-                for symbol in symbols
-                if needs_documentation(symbol, settings.coverage, settings.existing_docs)
-            ]
-            if not targets:
-                item = prepare(file_path, symbols, {}, settings)
-                _show(item, "not used", 0)
-                continue
-            started = perf_counter()
-            last_error: Exception | None = None
-            requests = (
-                [(content, targets)]
-                if settings.request_scope == "file"
-                else [
-                    (source_for_symbol(content, symbol, file_path.suffix, relative), [symbol])
-                    for symbol in targets
-                ]
-            )
-            descriptions: dict[str, Documentation] = {}
-            generation_failed = False
-            for request_number, (source, requested_symbols) in enumerate(requests, start=1):
-                for attempt in range(1, MAX_AI_ATTEMPTS + 1):
-                    candidates = settings.model_candidates
-                    candidate = _model_for_attempt(candidates, attempt)
-                    label = (
-                        relative
-                        if settings.request_scope == "file"
-                        else (
-                            f"{request_number}/{len(requests)} "
-                            f"{relative}:{requested_symbols[0].name}"
-                        )
-                    )
-                    try:
-                        with _loading(
-                            f"Generating docs [{label}] | model: {candidate} "
-                            f"({attempt}/{MAX_AI_ATTEMPTS})..."
-                        ):
-                            generated = documentation_for(
-                                source,
-                                requested_symbols,
-                                replace(settings, model=candidate, models=()),
-                            )
-                            descriptions.update(generated)
-                        if settings.request_scope == "symbol":
-                            target = requested_symbols[0]
-                            if settings.output == "apply":
-                                current_symbols = discover(
-                                    file_path.read_text(encoding="utf-8"),
-                                    file_path.suffix,
-                                    relative,
-                                )
-                                current_target = next(
-                                    (
-                                        symbol
-                                        for symbol in current_symbols
-                                        if symbol.name == target.name and symbol.kind == target.kind
-                                    ),
-                                    None,
-                                )
-                                if current_target is None:
-                                    raise DocGubError(
-                                        f"{relative}: symbol `{target.name}` changed "
-                                        "during generation."
-                                    )
-                                item = prepare(
-                                    file_path,
-                                    current_symbols,
-                                    generated,
-                                    settings,
-                                    selected_symbols=[current_target],
-                                )
-                                if item.diff:
-                                    apply(item)
-                                    if relative not in completed:
-                                        completed.append(relative)
-                        break
-                    except (AIProviderError, InvalidAIResponseError) as exc:
-                        last_error = exc
-                        if attempt < MAX_AI_ATTEMPTS:
-                            next_model = _model_for_attempt(candidates, attempt + 1)
-                            reason = (
-                                "AI request timed out"
-                                if isinstance(exc, AITimeoutError)
-                                else str(exc)
-                            )
-                            typer.secho(
-                                f"{reason} with model [{candidate}]. Retrying with model "
-                                f"[{next_model}] ({attempt + 1}/{MAX_AI_ATTEMPTS})...",
-                                fg=typer.colors.YELLOW,
-                            )
-                else:
-                    generation_failed = True
-                    break
-            if generation_failed:
-                skipped.append(relative)
-                _show_skipped(
-                    relative, f"generation failed after {MAX_AI_ATTEMPTS} attempts: {last_error}"
-                )
-                continue
-            if settings.request_scope == "symbol" and settings.output == "apply":
-                continue
-            try:
-                item = prepare(file_path, symbols, descriptions, settings)
-            except DocGubError as exc:
-                skipped.append(relative)
-                _show_skipped(relative, str(exc))
-                continue
-            _show(item, candidate, perf_counter() - started)
-            if settings.output == "apply" and item.diff:
-                try:
-                    apply(item)
-                except DocGubError as exc:
-                    skipped.append(relative)
-                    _show_skipped(relative, str(exc))
-                    continue
-                completed.append(relative)
-                typer.secho(f"Applied documentation: {relative}", fg=typer.colors.GREEN)
-
-        if settings.output == "preview":
-            if skipped:
-                typer.secho(f"Skipped files: {len(skipped)}", fg=typer.colors.YELLOW, bold=True)
-            return
-        typer.secho(
-            f"Documentation applied to {len(completed)} file(s).", fg=typer.colors.GREEN, bold=True
-        )
-        if skipped:
-            typer.secho(f"Skipped files: {len(skipped)}", fg=typer.colors.YELLOW, bold=True)
+            _process_file(repo, relative, settings, show_diff, state)
+        _finish_run(settings, state, continue_on_error)
     except (DocGubError, UnicodeDecodeError, SyntaxError) as exc:
         message = _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
         typer.secho(f"Error: {message}", fg=typer.colors.RED, bold=True, err=True)
@@ -352,10 +418,14 @@ def doc_gub(
 @config_app.command("init")
 def config_init(path: Path = typer.Option(Path(".doc-gub.toml"), "--path")) -> None:
     """Create a documentation configuration template without overwriting files."""
-    if path.exists():
-        typer.secho(f"Error: {path} already exists.", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
-    path.write_text(TEMPLATE, encoding="utf-8")
+    try:
+        if path.exists():
+            typer.secho(f"Error: {path} already exists.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        path.write_text(TEMPLATE, encoding="utf-8")
+    except OSError as exc:
+        typer.secho(f"Error: unable to create {path}: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
     typer.secho(f"Configuration created at {path}.", fg=typer.colors.GREEN)
 
 
