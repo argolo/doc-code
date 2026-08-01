@@ -1,8 +1,4 @@
-"""Test cli behavior.
-
-Módulo de teste para a ferramenta doc_gub, que inclui funções para verificar o carregamento,
-gerenciamento de símbolos e aplicação de configurações.
-"""
+"""Test cli behavior."""
 
 from __future__ import annotations
 
@@ -14,22 +10,14 @@ from typer.testing import CliRunner
 from doc_gub import cli
 from doc_gub.cli import _loading, _model_for_attempt, _undocumented_symbols
 from doc_gub.config import Settings
-from doc_gub.errors import AIProviderError
-from doc_gub.symbols import Symbol, discover, source_for_symbol
+from doc_gub.errors import AIProviderError, AITimeoutError, DocGubError
+from doc_gub.symbols import Documentation, Symbol, discover, source_for_symbol
 
 
 def test_loading_reports_progress_when_stderr_is_not_a_terminal(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Test loading reports progress when stderr is not a terminal.
-
-    Verifica que o progresso de carregamento dos relatórios seja exibido corretamente quando a
-    saída de erro (stderr) não é um terminal, garantindo que nenhuma mensagem residual permaneça em
-    `stderr`.
-
-    Args:
-        capsys: Description of capsys.
-    """
+    """Verify loading reports progress when stderr is not a terminal."""
     with _loading("Generating documentation for [sample.py]"):
         pass
 
@@ -39,15 +27,7 @@ def test_loading_reports_progress_when_stderr_is_not_a_terminal(
 def test_loading_draws_a_single_stable_line_in_a_terminal(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test loading draws a single stable line in a terminal.
-
-    Verifica se o processo de carregamento exibe exatamente uma linha estável e única no
-    terminal, mesmo que haja múltiplas chamadas internas.
-
-    Args:
-        capsys: Description of capsys.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify loading draws a single stable line in a terminal."""
     monkeypatch.setattr(cli.sys.stderr, "isatty", lambda: True)
 
     with _loading("Generating documentation for [1/2 sample.py:first]"):
@@ -57,12 +37,7 @@ def test_loading_draws_a_single_stable_line_in_a_terminal(
 
 
 def test_retries_cycle_through_model_candidates() -> None:
-    """Test retries cycle through model candidates.
-
-    Verifica se o sistema de retentativas cicla corretamente através dos candidatos de modelo
-    definidos, garantindo que a sequência seja repetitiva (ex: model-one, model-two, model-one,
-    model-two).
-    """
+    """Verify retries cycle through model candidates."""
     candidates = ("model-one", "model-two")
 
     assert [_model_for_attempt(candidates, attempt) for attempt in range(1, 5)] == [
@@ -74,11 +49,7 @@ def test_retries_cycle_through_model_candidates() -> None:
 
 
 def test_check_finds_undocumented_symbols_without_calling_ai() -> None:
-    """Test check finds undocumented symbols without calling ai.
-
-    Verifica se a função consegue identificar símbolos não documentados em um conteúdo de módulo
-    sem chamar IA.
-    """
+    """Verify check finds undocumented symbols without calling ai."""
     content = (
         '"""Module docs."""\n\ndef documented():\n    """Docs."""\n\ndef missing():\n    pass\n'
     )
@@ -89,27 +60,15 @@ def test_check_finds_undocumented_symbols_without_calling_ai() -> None:
 def test_reports_python_syntax_errors_with_file_line_and_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test reports python syntax errors with file line and source.
-
-    Testa se o relatório de execução do CLI captura erros de sintaxe Python, incluindo nome do
-    arquivo, número da linha e trecho do código fonte.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify reports python syntax errors with file line and source."""
     path = tmp_path / "test_cli.py"
     path.write_text("\n" * 16 + "def broken(:\n", encoding="utf-8")
 
     class Repo:
-        """Uma classe que representa um repositório, inicializada com um caminho raiz."""
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Provide init.
-
-            Inicializa o objeto Repo, definindo o atributo 'root' para o caminho temporário
-            fornecido.
-            """
+            """Initialize the test double."""
             self.root = tmp_path
 
     monkeypatch.setattr(cli, "GitRepo", Repo)
@@ -127,15 +86,15 @@ def test_reports_python_syntax_errors_with_file_line_and_source(
 def test_check_reports_invalid_files_without_skipping_other_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Inspect every selected file even when one Python file cannot be parsed."""
+    """Verify check reports invalid files without skipping other files."""
     (tmp_path / "broken.py").write_text("def broken(:\n", encoding="utf-8")
     (tmp_path / "missing.py").write_text("def missing():\n    pass\n", encoding="utf-8")
 
     class Repo:
-        """Repository double rooted at the temporary directory."""
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Inicializa uma nova instância de Repo."""
+            """Initialize the test double."""
             self.root = tmp_path
 
     monkeypatch.setattr(cli, "GitRepo", Repo)
@@ -151,19 +110,16 @@ def test_check_reports_invalid_files_without_skipping_other_files(
 def test_generation_skips_invalid_files_and_continues_the_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A bad source file does not prevent documentation for a later valid file."""
+    """Verify generation skips invalid files and continues the scope."""
     (tmp_path / "broken.py").write_text("def broken(:\n", encoding="utf-8")
     valid = tmp_path / "valid.py"
     valid.write_text("def valid():\n    return True\n", encoding="utf-8")
 
     class Repo:
-        """Repository double rooted at the temporary directory."""
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Inicializa uma instância de Repo.
-
-            Define o diretório raiz para o caminho temporário.
-            """
+            """Initialize the test double."""
             self.root = tmp_path
 
     settings = Settings(confirm=False, models=("test",))
@@ -178,24 +134,18 @@ def test_generation_skips_invalid_files_and_continues_the_scope(
 
     result = CliRunner().invoke(cli.app, ["broken.py", "valid.py"])
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
     assert "Skipped documentation: broken.py" in result.output
     assert "valid.py" in result.output
+
+    continued = CliRunner().invoke(cli.app, ["--continue-on-error", "broken.py", "valid.py"])
+    assert continued.exit_code == 0, continued.output
 
 
 def test_apply_writes_each_file_before_later_generation_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test apply writes each file before later generation failures.
-
-    Verifica que a documentação é aplicada em cada arquivo antes de falhas subsequentes na
-    geração, garantindo que arquivos anteriores sejam processados corretamente mesmo se o processo
-    falhar mais tarde.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify apply writes each file before later generation failures."""
     first = tmp_path / "first.py"
     second = tmp_path / "second.py"
     first.write_text("def first():\n    return True\n", encoding="utf-8")
@@ -203,18 +153,10 @@ def test_apply_writes_each_file_before_later_generation_failures(
     second.write_text(second_source, encoding="utf-8")
 
     class Repo:
-        """Provide a repository test double.
-
-        Classe que representa um repositório, inicializando o atributo 'root' com o caminho
-        temporário (tmp_path).
-        """
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Provide init.
-
-            Inicializa uma nova instância de Repo, definindo o diretório raiz para um caminho
-            temporário.
-            """
+            """Initialize the test double."""
             self.root = tmp_path
 
     settings = Settings(output="apply", confirm=False, selection="repository", models=("test",))
@@ -222,16 +164,7 @@ def test_apply_writes_each_file_before_later_generation_failures(
     monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
 
     def fake_resolve(_: object, paths: list[Path], __: Settings) -> list[str]:
-        """Provide fake resolve.
-
-        Simula um resolvedor que retorna os caminhos de arquivos em ordem, simulando a escrita
-        sequencial antes de falhas subsequentes.
-
-        Args:
-            _: Description of _.
-            paths: Description of paths.
-            __: Description of __.
-        """
+        """Fake resolve."""
         assert paths == [Path("first.py"), Path("second.py")]
         return ["first.py", "second.py"]
 
@@ -239,16 +172,7 @@ def test_apply_writes_each_file_before_later_generation_failures(
     monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
 
     def fake_documentation(content: str, symbols: list[Symbol], _: Settings) -> dict[str, str]:
-        """Provide fake documentation.
-
-        Gera um dicionário de documentações para os símbolos fornecidos, desde que o conteúdo não
-        contenha a palavra 'second'.
-
-        Args:
-            content: Description of content.
-            symbols: Description of symbols.
-            _: Description of _.
-        """
+        """Fake documentation."""
         if "second" in content:
             raise AIProviderError("provider unavailable")
         return {symbol.name: "Generated docs." for symbol in symbols}
@@ -257,7 +181,7 @@ def test_apply_writes_each_file_before_later_generation_failures(
 
     result = CliRunner().invoke(cli.app, ["first.py", "second.py"])
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
     assert '"""Generated docs."""' in first.read_text(encoding="utf-8")
     assert second.read_text(encoding="utf-8") == second_source
     assert "Applied documentation: first.py" in result.output
@@ -265,7 +189,7 @@ def test_apply_writes_each_file_before_later_generation_failures(
 
 
 def test_symbol_scope_contains_only_the_requested_python_function() -> None:
-    """Verifica se o escopo do símbolo contém apenas a função Python solicitada."""
+    """Verify symbol scope contains only the requested python function."""
     content = "def first():\n    return 1\n\ndef second():\n    return 2\n"
     second = next(symbol for symbol in discover(content, ".py") if symbol.name == "second")
 
@@ -273,11 +197,7 @@ def test_symbol_scope_contains_only_the_requested_python_function() -> None:
 
 
 def test_module_symbol_scope_uses_a_python_outline_without_function_bodies() -> None:
-    """Test module symbol scope uses a python outline without function bodies.
-
-    Verifica se o escopo de um símbolo em um módulo Python contém apenas a estrutura básica
-    (definições e imports) sem implementar corpos de funções ou variáveis internas.
-    """
+    """Verify module symbol scope uses a python outline without function bodies."""
     content = '''"""Utilities for values."""
 import math
 
@@ -301,28 +221,16 @@ def calculate(value):
 def test_symbol_request_scope_calls_the_model_once_per_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test symbol request scope calls the model once per target.
-
-    Testa que o escopo de solicitação de símbolos chama o modelo uma vez por alvo, verificando a
-    chamada para documentar funções específicas em um módulo simulado.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify symbol request scope calls the model once per target."""
     source = '"""Module docs."""\n\ndef first():\n    return 1\n\ndef second():\n    return 2\n'
     path = tmp_path / "sample.py"
     path.write_text(source, encoding="utf-8")
 
     class Repo:
-        """Uma classe que inicializa um atributo root utilizando o valor de tmp_path."""
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Provide init.
-
-            Inicializa uma nova instância de Repo, definindo o atributo 'root' para o caminho
-            temporário atual.
-            """
+            """Initialize the test double."""
             self.root = tmp_path
 
     settings = Settings(confirm=False, request_scope="symbol", models=("test",))
@@ -333,16 +241,7 @@ def test_symbol_request_scope_calls_the_model_once_per_target(
     monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
 
     def fake_documentation(content: str, symbols: list[Symbol], _: Settings) -> dict[str, str]:
-        """Provide fake documentation.
-
-        Função que simula a geração de documentação para um conteúdo e uma lista de símbolos,
-        registrando as chamadas recebidas em um histórico interno.
-
-        Args:
-            content: Description of content.
-            symbols: Description of symbols.
-            _: Description of _.
-        """
+        """Fake documentation."""
         received.append((content, [symbol.name for symbol in symbols]))
         return {symbol.name: "Generated docs." for symbol in symbols}
 
@@ -355,13 +254,19 @@ def test_symbol_request_scope_calls_the_model_once_per_target(
         ("def first():\n    return 1\n", ["first"]),
         ("def second():\n    return 2\n", ["second"]),
     ]
+    assert "+++ b/" in result.output
+    assert '+    """Generated docs."""' in result.output
+
+    compact = CliRunner().invoke(cli.app, ["--no-show-diff", "sample.py"])
+    assert compact.exit_code == 0, compact.output
+    assert "+++ b/" not in compact.output
 
 
 @pytest.mark.parametrize("request_scope", ["file", "symbol"])
 def test_preserve_skips_documented_symbols_for_every_request_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request_scope: str
 ) -> None:
-    """Ensure preserve excludes documented modules, classes, methods, and functions."""
+    """Verify preserve skips documented symbols for every request scope."""
     source = (
         '"""Module docs."""\n\n'
         "class DocumentedClass:\n"
@@ -379,10 +284,10 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
     path.write_text(source, encoding="utf-8")
 
     class Repo:
-        """Representa um repositório de código."""
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Inicializa uma nova instância de Repo."""
+            """Initialize the test double."""
             self.root = tmp_path
 
     received: list[list[str]] = []
@@ -399,19 +304,7 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
     monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
 
     def fake_documentation(_: str, symbols: list[Symbol], __: Settings) -> dict[str, str]:
-        """Uma função que recebe descrições para os símbolos.
-
-        Retorna um dicionário com as descrições
-        geradas para cada símbolo.
-
-        Args:
-            _: Um argumento ignorado, tipicamente usado para parâmetros que não são utilizados na
-            função.
-            symbols: Uma lista de objetos do tipo Symbol, representando os símbolos a serem
-            documentados.
-            __: Outro argumento ignorado, geralmente usado para configurações ou contextos
-            adicionais.
-        """
+        """Fake documentation."""
         received.append([symbol.name for symbol in symbols])
         return {symbol.name: "Generated docs." for symbol in symbols}
 
@@ -426,33 +319,16 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
 def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test symbol scope applies completed symbols before a later failure.
-
-    Testa que o escopo do símbolo aplica os símbolos concluídos antes de uma falha posterior,
-    garantindo que a documentação dos símbolos processados com sucesso seja aplicada mesmo se um
-    símbolo subsequente falhar.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify symbol scope applies completed symbols before a later failure."""
     source = '"""Module docs."""\n\ndef first():\n    return 1\n\ndef second():\n    return 2\n'
     path = tmp_path / "sample.py"
     path.write_text(source, encoding="utf-8")
 
     class Repo:
-        """Provide a repository test double.
-
-        Uma classe que representa um repositório, inicializando o atributo root com um caminho
-        temporário.
-        """
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Provide init.
-
-            Inicializa uma nova instância de Repo, definindo o atributo 'root' para o caminho
-            temporário atual.
-            """
+            """Initialize the test double."""
             self.root = tmp_path
 
     settings = Settings(output="apply", confirm=False, request_scope="symbol", models=("test",))
@@ -462,16 +338,7 @@ def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
     monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
 
     def fake_documentation(_: str, symbols: list[Symbol], __: Settings) -> dict[str, str]:
-        """Provide fake documentation.
-
-        Gera documentação para símbolos, verificando se o escopo aplicado é baseado nos símbolos
-        concluídos antes de uma falha posterior.
-
-        Args:
-            _: Description of _.
-            symbols: Description of symbols.
-            __: Description of __.
-        """
+        """Fake documentation."""
         if symbols[0].name == "second":
             raise AIProviderError("provider unavailable")
         return {"first": "First generated documentation."}
@@ -480,7 +347,7 @@ def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
 
     result = CliRunner().invoke(cli.app, ["sample.py"])
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
     assert '"""First generated documentation."""' in path.read_text(encoding="utf-8")
     assert "Applied documentation: sample.py:first" not in result.output
     assert "Skipped documentation: sample.py" in result.output
@@ -489,15 +356,7 @@ def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
 def test_symbol_scope_applies_class_docs_before_a_decorated_method(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test symbol scope applies class docs before a decorated method.
-
-    Testa se a documentação do símbolo (docstring) é aplicada ao nível da classe, mesmo que haja
-    métodos decorados nela.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify symbol scope applies class docs before a decorated method."""
     source = (
         '"""Module docs."""\n\n'
         "class FinancialCalculator:\n"
@@ -510,14 +369,10 @@ def test_symbol_scope_applies_class_docs_before_a_decorated_method(
     path.write_text(source, encoding="utf-8")
 
     class Repo:
-        """Uma classe que representa um repositório e inicializa um diretório raiz."""
+        """Provide a repository test double."""
 
         def __init__(self) -> None:
-            """Provide init.
-
-            Inicializa uma nova instância de Repo, definindo o atributo 'root' para o caminho
-            temporário atual.
-            """
+            """Initialize the test double."""
             self.root = tmp_path
 
     settings = Settings(output="apply", confirm=False, request_scope="symbol", models=("test",))
@@ -542,3 +397,107 @@ def test_symbol_scope_applies_class_docs_before_a_decorated_method(
         "    @staticmethod\n"
     ) in updated
     assert "invalid syntax" not in result.output
+
+
+def test_noninteractive_apply_requires_explicit_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify noninteractive apply requires explicit confirmation."""
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+    with pytest.raises(DocGubError, match="use --yes"):
+        cli._confirm_application(Settings(output="apply"), ["sample.py"], yes=False)
+
+
+def test_request_retries_with_the_next_model_after_a_timeout(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify request retries with the next model after a timeout."""
+    symbol = next(
+        item for item in discover("def work():\n    pass\n", ".py") if item.name == "work"
+    )
+    attempted: list[str] = []
+
+    def fake_documentation(
+        _source: str, _symbols: list[Symbol], settings: Settings
+    ) -> dict[str, Documentation]:
+        """Simula o processo de documentação.
+
+        Adicionando um modelo ao histórico e retornando uma estrutura de dicionário com informações
+        sobre os símbolos.
+
+        Args:
+            _source: O conteúdo da fonte a ser processada.
+            _symbols: Uma lista de objetos Symbol que representam os símbolos encontrados na fonte.
+            settings: Configurações operacionais, incluindo o modelo do sistema.
+
+        """
+        attempted.append(settings.model)
+        if len(attempted) == 1:
+            raise AITimeoutError("timed out")
+        return {symbol.name: Documentation("Perform work.")}
+
+    monkeypatch.setattr(cli, "documentation_for", fake_documentation)
+    monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 2)
+
+    generated, model = cli._request_documentation(
+        "def work():\n    pass\n",
+        [symbol],
+        Settings(models=("first", "second")),
+        "sample.py",
+    )
+
+    assert attempted == ["first", "second"]
+    assert model == "second"
+    assert generated[symbol.name].description == "Perform work."
+    assert "AI request timed out" in capsys.readouterr().out
+
+
+def test_symbol_apply_rejects_a_declaration_changed_during_generation(tmp_path: Path) -> None:
+    """Verify symbol apply rejects a declaration changed during generation."""
+    path = tmp_path / "sample.py"
+    original = "def before():\n    pass\n"
+    target = next(item for item in discover(original, ".py") if item.name == "before")
+    path.write_text("def after():\n    pass\n", encoding="utf-8")
+
+    with pytest.raises(DocGubError, match="changed during generation"):
+        cli._apply_generated_symbol(
+            path,
+            "sample.py",
+            target,
+            {target.name: Documentation("Describe the original function.")},
+            Settings(output="apply", confirm=False),
+        )
+
+
+def test_config_init_reports_parent_directory_errors(tmp_path: Path) -> None:
+    """Verify config creation failures are actionable and traceback-free."""
+    target = tmp_path / "missing" / "config.toml"
+
+    result = CliRunner().invoke(cli.config_app, ["init", "--path", str(target)])
+
+    assert result.exit_code == 1
+    assert f"Error: unable to create {target}" in result.output
+
+
+def test_generation_reports_source_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify source filesystem failures are reported without a traceback."""
+    (tmp_path / "sample.py").mkdir()
+
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["sample.py"])
+
+    result = CliRunner().invoke(cli.app, ["--continue-on-error"])
+
+    assert result.exit_code == 0
+    assert "Skipped documentation: sample.py" in result.output
+    assert "Unable to read source file" in result.output
