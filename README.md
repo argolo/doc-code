@@ -1,42 +1,42 @@
-# doc-gub
+# Doc Code
 
-`doc-gub` gera documentação para arquivos Python, JavaScript e TypeScript usando OpenAI, Gemini ou Ollama.
+`doc-code` gera documentação para arquivos Python, JavaScript e TypeScript usando OpenAI, Gemini ou Ollama.
 
 Por padrão, ele mostra um diff revisável da documentação gerada. Use `--no-show-diff` para manter somente o resumo compacto. Para gravar, execute:
 
 ```shell
-doc-gub --output apply
+doc-code --output apply
 ```
 
-Em automações, use `--yes` junto com `--output apply`. Cada arquivo é gravado assim que sua geração e validação terminam; falhas posteriores não desfazem arquivos já aplicados. O arquivo é comparado com a prévia imediatamente antes da escrita; se tiver sido alterado, o `doc-gub` não o sobrescreve.
+Em automações, use `--yes` junto com `--output apply`. Cada arquivo é gravado assim que sua geração e validação terminam; falhas posteriores não desfazem arquivos já aplicados. O arquivo é comparado com a prévia imediatamente antes da escrita; se tiver sido alterado, o `doc-code` não o sobrescreve.
 
 ## Instalação e requisitos
 
-O `doc-gub` requer Python 3.11 ou superior e Git no `PATH`. Para processar JavaScript, instale Node.js; para TypeScript/TSX, instale também o compilador `tsc` (por exemplo, `npm install --global typescript`). Esses executáveis são usados para validar a sintaxe gerada antes de qualquer arquivo ser alterado.
+O `doc-code` requer Python 3.11 ou superior e Git no `PATH`. Para processar JavaScript, instale Node.js; para TypeScript/TSX, instale também o compilador `tsc` (por exemplo, `npm install --global typescript`). Esses executáveis são usados para validar a sintaxe gerada antes de qualquer arquivo ser alterado.
 
-Para desenvolvimento, use `uv sync --locked --all-extras`; para instalar o pacote publicado, use `pip install doc-gub`.
+Para desenvolvimento, use `uv sync --locked --all-extras`; para instalar o pacote publicado, use `pip install doc-code`.
 
 ## Uso
 
 ```shell
-doc-gub                         # mudanças Git (staged, unstaged e arquivos não rastreados)
-doc-gub src/a.py src/b.ts       # um ou mais arquivos/diretórios específicos
-doc-gub --selection repository  # todos os arquivos elegíveis
-doc-gub --coverage all --format numpy
-doc-gub --language Portuguese
-doc-gub --request-scope symbol
-doc-gub --no-show-diff          # prévia compacta, sem o diff unificado
-doc-gub --check                 # falha no CI se houver símbolos sem documentação
-doc-gub --continue-on-error     # aceita status 0 mesmo quando algum arquivo for ignorado
-doc-gub config init
-doc-gub config show
+doc-code                         # mudanças Git (staged, unstaged e arquivos não rastreados)
+doc-code src/a.py src/b.ts       # um ou mais arquivos/diretórios específicos
+doc-code --selection repository  # todos os arquivos elegíveis
+doc-code --coverage all --format numpy
+doc-code --language Portuguese
+doc-code --request-scope symbol
+doc-code --no-show-diff          # prévia compacta, sem o diff unificado
+doc-code --check                 # falha no CI se houver símbolos sem documentação
+doc-code --continue-on-error     # aceita status 0 mesmo quando algum arquivo for ignorado
+doc-code config init
+doc-code config show
 ```
 
-A configuração segue esta precedência: flags, `--config`, variáveis `DOC_GUB_*`, `.doc-gub.toml`, configuração do usuário e valores padrão. Defina `language = "Portuguese"` em `[documentation]`, use `DOC_GUB_LANGUAGE` ou passe `--language Portuguese` para controlar o idioma gerado. Credenciais usam `OPENAI_API_KEY` ou `GEMINI_API_KEY`; o Ollama não requer credencial.
+A configuração segue esta precedência: flags, `--config`, variáveis `DOC_CODE_*`, `.doc-code.toml`, configuração do usuário e valores padrão. Defina `language = "Portuguese"` em `[documentation]`, use `DOC_CODE_LANGUAGE` ou passe `--language Portuguese` para controlar o idioma gerado. Credenciais usam `OPENAI_API_KEY` ou `GEMINI_API_KEY`; o Ollama não requer credencial.
 
-## Configuração (`.doc-gub.toml`)
+## Configuração (`.doc-code.toml`)
 
-Crie um arquivo inicial com `doc-gub config init`. As seções `[ai]`, `[documentation]` e `[limits]` são combinadas em uma única configuração; as opções abaixo são todas as chaves aceitas.
+Crie um arquivo inicial com `doc-code config init`. As seções `[ai]`, `[documentation]` e `[limits]` são combinadas em uma única configuração; as opções abaixo são todas as chaves aceitas.
 
 ### `[ai]`
 
@@ -81,15 +81,15 @@ Crie um arquivo inicial com `doc-gub config init`. As seções `[ai]`, `[documen
 
 As docstrings Python geradas seguem o PEP 257: resumos terminam em ponto, docstrings multilinha usam uma linha em branco antes e depois das seções e fecham as aspas em uma linha própria. Docstrings de módulo e classe são separadas da próxima declaração por uma linha em branco. As linhas vazias não recebem espaços de indentação.
 
-O comprimento de linha também segue o projeto-alvo. Para Python, o `doc-gub` usa `tool.ruff.line-length` e `tool.ruff.lint.pydocstyle.convention` do `pyproject.toml` mais próximo (ou 88 e o formato configurado no `doc-gub` quando ausentes). Resumos longos são separados da descrição por uma linha em branco, conforme D205. Para JavaScript e TypeScript, usa `max-len` do `eslint.config.js`, `eslint.config.mjs` ou `eslint.config.cjs` mais próximo (ou 100 sem regra). Descrições e linhas JSDoc são quebradas já considerando a indentação e os delimitadores.
+O comprimento de linha também segue o projeto-alvo. Para Python, o `doc-code` usa `tool.ruff.line-length` e `tool.ruff.lint.pydocstyle.convention` do `pyproject.toml` mais próximo (ou 88 e o formato configurado no `doc-code` quando ausentes). Resumos longos são separados da descrição por uma linha em branco, conforme D205. Para JavaScript e TypeScript, usa `max-len` do `eslint.config.js`, `eslint.config.mjs` ou `eslint.config.cjs` mais próximo (ou 100 sem regra). Descrições e linhas JSDoc são quebradas já considerando a indentação e os delimitadores.
 
 Os formatos `google`, `numpy` e `sphinx` controlam somente a seção de parâmetros. Para reescrever docstrings já existentes com esse padrão, use:
 
 ```shell
-doc-gub --coverage all --existing-docs replace --output apply --yes
+doc-code --coverage all --existing-docs replace --output apply --yes
 ```
 
-Para funções e métodos, o `doc-gub` solicita ao modelo uma descrição específica para cada argumento e a insere na seção de parâmetros correspondente. A resposta estruturada deve conter todos os símbolos e todos os argumentos solicitados; respostas incompletas são rejeitadas e geradas novamente. Integrações legadas mantêm um texto de fallback para compatibilidade.
+Para funções e métodos, o `doc-code` solicita ao modelo uma descrição específica para cada argumento e a insere na seção de parâmetros correspondente. A resposta estruturada deve conter todos os símbolos e todos os argumentos solicitados; respostas incompletas são rejeitadas e geradas novamente. Integrações legadas mantêm um texto de fallback para compatibilidade.
 
 Por padrão, `request_scope = "file"` envia o arquivo e todos os símbolos que precisam de geração em uma única requisição. Use `request_scope = "symbol"` (ou `--request-scope symbol`) para enviar cada símbolo em sua própria requisição, com apenas seu escopo de código. Isso reduz o contexto em arquivos grandes, mas pode aumentar latência e o número de chamadas. Para módulos, ele envia um índice estrutural — docstring inicial, imports, constantes e assinaturas públicas — sem os corpos. Nesse modo, o terminal exibe apenas o progresso e o item ativo (`3/10 arquivo:símbolo`); com `output = "apply"`, cada docstring é gravada imediatamente, preservando as conclusões anteriores se uma geração posterior falhar.
 
