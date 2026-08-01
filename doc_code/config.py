@@ -72,28 +72,28 @@ class Settings:
 
 TEMPLATE = """[ai]
 provider = "ollama"
-models = ["qwen2.5-coder:14b", "gemma4:e4b"]
-max_input_tokens = 12000
-context_window_tokens = 32768
-max_output_tokens = 800
-temperature = 0.2
-timeout_seconds = 60
+models = ["gemma4:e4b", "qwen2.5-coder:14b"]
+max_input_tokens = 3048
+context_window_tokens = 16384
+max_output_tokens = 512
+temperature = 0.1
+timeout_seconds = 180
 
 [documentation]
-selection = "changes"
+selection = "repository"
 coverage = "missing"
 existing_docs = "preserve"
-request_scope = "file"
+request_scope = "symbol"
 language = "English"
 python_format = "google"
 javascript_format = "jsdoc"
-output = "preview"
-confirm = true
+output = "apply"
+confirm = false
 
 [limits]
 max_files_per_request = 50
 max_file_bytes = 100000
-exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js", "**/package-lock.json"]
+exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js", "**/package-lock.json", "*.md", "*.toml", "CNAME", "Makefile", "LICENSE", ".venv"]
 """
 
 _SECTION_OPTIONS = {
