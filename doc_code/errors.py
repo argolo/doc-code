@@ -5,6 +5,10 @@ class DocGubError(Exception):
     """Expected, actionable application error."""
 
 
+class NoEligibleFilesError(DocGubError):
+    """The selected scope contains no supported source files to process."""
+
+
 class AIProviderError(DocGubError):
     """The configured model provider could not be reached or answered incorrectly."""
 
