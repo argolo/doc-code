@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from doc_gub import git as git_module
-from doc_gub.errors import DocGubError
-from doc_gub.git import GitRepo
+from doc_code import git as git_module
+from doc_code.errors import DocGubError
+from doc_code.git import GitRepo
 
 
 def test_git_missing_from_path_is_reported_as_a_domain_error(
