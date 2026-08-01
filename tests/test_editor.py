@@ -321,6 +321,41 @@ def test_python_docstrings_follow_the_nearest_ruff_line_length(tmp_path: Path) -
     ast.parse(prepared.after)
 
 
+def test_prepared_diff_uses_the_relative_display_path(tmp_path: Path) -> None:
+    """Verify previews avoid machine-specific absolute paths when one is available."""
+    path = tmp_path / "sample.py"
+    source = "def calculate():\n    return 1\n"
+    path.write_text(source, encoding="utf-8")
+    symbols = discover(source, ".py")
+    prepared = prepare(
+        path,
+        symbols,
+        {"calculate": Documentation("Calculate a value.")},
+        load(tmp_path),
+        display_path=Path("package/sample.py"),
+    )
+
+    assert "--- a/package/sample.py" in prepared.diff
+    assert "+++ b/package/sample.py" in prepared.diff
+    assert str(tmp_path) not in prepared.diff
+
+
+def test_python_rendering_options_support_extended_ruff_toml(tmp_path: Path) -> None:
+    """Verify Ruff TOML files and inherited pydocstyle configuration are respected."""
+    project = tmp_path / "python-project"
+    package = project / "package"
+    package.mkdir(parents=True)
+    (project / "base.toml").write_text(
+        "[lint.pydocstyle]\nconvention = \"numpy\"\n", encoding="utf-8"
+    )
+    (project / "ruff.toml").write_text(
+        'extend = "base.toml"\nline-length = 52\n', encoding="utf-8"
+    )
+    (package / "pyproject.toml").write_text("[project]\nname = \"package\"\n", encoding="utf-8")
+
+    assert editor._python_rendering_options(package / "sample.py", "google") == (52, "numpy")
+
+
 def test_long_python_summary_passes_the_project_d205_rule(tmp_path: Path) -> None:
     """Verify long summaries have a blank line before their detailed description."""
     (tmp_path / "pyproject.toml").write_text(
@@ -364,7 +399,41 @@ def test_long_python_summary_passes_the_project_d205_rule(tmp_path: Path) -> Non
         '    """Simula o processo de documentação.\n\n    Adicionando um modelo ao histórico'
     ) in prepared.after
     result = subprocess.run(
-        [str(Path(sys.executable).with_name("ruff")), "check", str(path)],
+        [sys.executable, "-m", "ruff", "check", str(path)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_python_docstrings_capitalize_generated_summaries_for_ruff(tmp_path: Path) -> None:
+    """Verify generated summaries meet Ruff's D403 capitalization requirement."""
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.ruff.lint]\n"
+        'select = ["D"]\n'
+        "[tool.ruff.lint.pydocstyle]\n"
+        'convention = "google"\n',
+        encoding="utf-8",
+    )
+    path = tmp_path / "sample.py"
+    source = '\"\"\"Calculate sample values.\"\"\"\n\n\ndef calculate():\n    return 1\n'
+    path.write_text(source, encoding="utf-8")
+    symbols = discover(source, ".py")
+    target = next(item for item in symbols if item.name == "calculate")
+    prepared = prepare(
+        path,
+        symbols,
+        {target.name: Documentation("retorna o valor calculado.")},
+        load(tmp_path),
+        selected_symbols=[target],
+    )
+    path.write_text(prepared.after, encoding="utf-8")
+
+    assert '"""Retorna o valor calculado."""' in prepared.after
+    result = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", str(path)],
         cwd=tmp_path,
         text=True,
         capture_output=True,
