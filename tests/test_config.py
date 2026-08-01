@@ -1,4 +1,4 @@
-"""Módulo que contém testes de integração e utilitários para o sistema doc-gub."""
+"""Test config behavior."""
 
 from __future__ import annotations
 
@@ -20,15 +20,7 @@ from doc_gub.symbols import discover
 
 
 def test_config_precedence_and_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Test config precedence and validation.
-
-    Testa a precedência e validação da configuração do projeto (ex: cobertura), verificando se as
-    variáveis de ambiente ou argumentos passados superam os valores configurados no arquivo TOML.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify config precedence and validation."""
     (tmp_path / ".doc-gub.toml").write_text("[documentation]\ncoverage = 'all'\n", encoding="utf-8")
     monkeypatch.setenv("DOC_GUB_COVERAGE", "minimal")
 
@@ -39,7 +31,7 @@ def test_config_precedence_and_validation(tmp_path: Path, monkeypatch: pytest.Mo
 def test_environment_values_are_converted_and_invalid_values_are_actionable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Normalize environment configuration without leaking conversion tracebacks."""
+    """Verify environment values are converted and invalid values are actionable."""
     monkeypatch.setenv("DOC_GUB_CONFIRM", "false")
 
     assert load(tmp_path).confirm is False
@@ -50,11 +42,19 @@ def test_environment_values_are_converted_and_invalid_values_are_actionable(
 
 
 def test_unknown_toml_options_are_reported_as_configuration_errors(tmp_path: Path) -> None:
-    """Reject misspelled options without exposing a dataclass traceback."""
+    """Verify unknown toml options are reported as configuration errors."""
     (tmp_path / ".doc-gub.toml").write_text("[ai]\nunknown = true\n", encoding="utf-8")
 
     with pytest.raises(DocGubError, match=r"Unknown option\(s\).*\[ai\].*unknown"):
         load(tmp_path)
+
+
+def test_explicit_configuration_must_exist(tmp_path: Path) -> None:
+    """Verify a missing explicit configuration is never silently ignored."""
+    missing = tmp_path / "missing.toml"
+
+    with pytest.raises(DocGubError, match=f"does not exist: {missing}"):
+        load(tmp_path, missing)
 
 
 @pytest.mark.parametrize(
@@ -67,22 +67,37 @@ def test_unknown_toml_options_are_reported_as_configuration_errors(tmp_path: Pat
 def test_model_and_endpoint_are_validated(
     tmp_path: Path, option: str, value: str, message: str
 ) -> None:
-    """Fail locally when a provider setting has an invalid type or shape."""
+    """Verify model and endpoint are validated."""
     (tmp_path / ".doc-gub.toml").write_text(f"[ai]\n{option} = {value!r}\n", encoding="utf-8")
 
     with pytest.raises(DocGubError, match=message):
         load(tmp_path)
 
 
+def test_provider_defaults_and_explicit_model_precedence(tmp_path: Path) -> None:
+    """Verify provider defaults and explicit model precedence."""
+    openai = load(tmp_path, provider="openai")
+    explicit = load(tmp_path, provider="openai", model="custom-openai-model")
+
+    assert openai.endpoint is None
+    assert openai.model == "gpt-5.6-sol"
+    assert openai.model_candidates == ("gpt-5.6-sol",)
+    assert explicit.model_candidates == ("custom-openai-model",)
+
+
+def test_authenticated_remote_endpoints_require_https(tmp_path: Path) -> None:
+    """Verify authenticated remote endpoints require https."""
+    with pytest.raises(DocGubError, match="must use HTTPS"):
+        load(tmp_path, provider="openai", endpoint="http://example.test/v1")
+
+    assert (
+        load(tmp_path, provider="openai", endpoint="http://localhost:8080/v1").endpoint
+        == "http://localhost:8080/v1"
+    )
+
+
 def test_language_is_loaded_and_included_in_the_ai_prompt(tmp_path: Path) -> None:
-    """Test language is loaded and included in the ai prompt.
-
-    Verifica que o idioma definido na configuração é corretamente carregado e incluído no prompt
-    enviado para a API de IA.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify language is loaded and included in the ai prompt."""
     (tmp_path / ".doc-gub.toml").write_text(
         "[documentation]\nlanguage = 'Portuguese'\n", encoding="utf-8"
     )
@@ -94,11 +109,7 @@ def test_language_is_loaded_and_included_in_the_ai_prompt(tmp_path: Path) -> Non
 
 
 def test_request_scope_can_be_configured(tmp_path: Path) -> None:
-    """Verifica se o escopo da requisição pode ser configurado em um arquivo TOML temporário.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify request scope can be configured."""
     (tmp_path / ".doc-gub.toml").write_text(
         "[documentation]\nrequest_scope = 'symbol'\n", encoding="utf-8"
     )
@@ -107,10 +118,7 @@ def test_request_scope_can_be_configured(tmp_path: Path) -> None:
 
 
 def test_structured_ai_response_requires_argument_documentation() -> None:
-    """Testa argumentos em uma resposta estruturada.
-
-    A resposta deve incluir argumentos para cada argumento solicitado da função.
-    """
+    """Verify structured ai response requires argument documentation."""
     symbols = discover("def calculate(value):\n    return value\n", ".py")
     function = next(symbol for symbol in symbols if symbol.name == "calculate")
 
@@ -129,7 +137,7 @@ def test_structured_ai_response_requires_argument_documentation() -> None:
 
 
 def test_structured_ai_response_requires_every_requested_symbol() -> None:
-    """Reject incomplete responses instead of inserting empty documentation."""
+    """Verify structured ai response requires every requested symbol."""
     symbols = discover("def first():\n    pass\n\ndef second():\n    pass\n", ".py")
     functions = [symbol for symbol in symbols if symbol.kind == "function"]
 
@@ -140,7 +148,7 @@ def test_structured_ai_response_requires_every_requested_symbol() -> None:
 
 
 def test_structured_ai_response_rejects_non_string_content() -> None:
-    """Keep malformed provider payloads inside the documented error boundary."""
+    """Verify structured ai response rejects non string content."""
     symbol = next(
         symbol for symbol in discover("def work():\n    pass\n", ".py") if symbol.name == "work"
     )
@@ -185,23 +193,16 @@ def test_documentation_for_normalizes_supported_provider_responses(
     response: dict[str, object],
     key_name: str | None,
 ) -> None:
-    """Exercise the provider-specific response paths without making network calls."""
+    """Verify documentation for normalizes supported provider responses."""
     if key_name:
         monkeypatch.setenv(key_name, "test-key")
-    received: list[dict[str, object]] = []
+    received: list[tuple[str, dict[str, object], dict[str, str]]] = []
 
     def fake_post(
-        _url: str, payload: dict[str, object], _headers: dict[str, str], _timeout: int
+        url: str, payload: dict[str, object], headers: dict[str, str], _timeout: int
     ) -> dict[str, object]:
-        """Simula uma requisição POST para um URL específico e retorna uma resposta simulada.
-
-        Args:
-            _url: O URL de destino da requisição.
-            payload: Os dados a serem enviados no corpo (body) da requisição.
-            _headers: Um dicionário contendo os cabeçalhos HTTP personalizados para a requisição.
-            _timeout: O tempo limite em segundos para a requisição.
-        """
-        received.append(payload)
+        """Fake post."""
+        received.append((url, payload, headers))
         return response
 
     monkeypatch.setattr(
@@ -217,30 +218,54 @@ def test_documentation_for_normalizes_supported_provider_responses(
 
     assert result["work"].description == "Work."
     assert received
+    url, payload, headers = received[0]
+    if provider == "openai":
+        assert url == "https://api.openai.com/v1/chat/completions"
+        assert payload["model"] == "gpt-5.6-sol"
+        assert "max_completion_tokens" in payload
+    elif provider == "gemini":
+        assert "models/gemini-3.6-flash:generateContent" in url
+        assert headers["x-goog-api-key"] == "test-key"
+        assert "?key=" not in url
+
+
+@pytest.mark.parametrize(
+    ("provider", "key_name"),
+    [("openai", "OPENAI_API_KEY"), ("gemini", "GEMINI_API_KEY"), ("ollama", None)],
+)
+def test_documentation_for_rejects_malformed_provider_envelopes(
+    monkeypatch: pytest.MonkeyPatch, provider: str, key_name: str | None
+) -> None:
+    """Verify documentation for rejects malformed provider envelopes."""
+    if key_name:
+        monkeypatch.setenv(key_name, "test-key")
+    monkeypatch.setattr(ai, "_post", lambda *_args, **_kwargs: {})
+    symbol = next(
+        symbol for symbol in discover("def work():\n    pass\n", ".py") if symbol.name == "work"
+    )
+
+    with pytest.raises(AIProviderError, match=f"{provider} provider returned an invalid response"):
+        documentation_for("def work():\n    pass\n", [symbol], Settings(provider=provider))
 
 
 def test_post_converts_invalid_transport_response_to_domain_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Do not leak JSON shape errors from the HTTP transport helper."""
+    """Verify post converts invalid transport response to domain error."""
 
     class Response:
-        """Minimal response context manager with a JSON array body."""
+        """Provide the Response test double."""
 
         def __enter__(self) -> Response:
-            """Entra a um contexto, retornando uma instância de Response."""
+            """Enter the response context."""
             return self
 
         def __exit__(self, *_args: object) -> None:
-            """Finaliza o contexto da resposta.
-
-            É chamado quando o bloco ``with`` é encerrado para limpar recursos ou executar lógica de
-            finalização.
-            """
+            """Exit the response context."""
             return None
 
         def read(self) -> bytes:
-            """Lê o conteúdo da resposta como um objeto de bytes."""
+            """Read."""
             return b"[]"
 
     monkeypatch.setattr(ai, "urlopen", lambda *_args, **_kwargs: Response())
@@ -262,16 +287,10 @@ def test_post_converts_transport_failures_to_domain_errors(
     transport_error: OSError,
     expected_error: type[AIProviderError],
 ) -> None:
-    """Classify provider transport failures without leaking standard-library errors."""
+    """Verify post converts transport failures to domain errors."""
 
     def fail_request(*_args: object, **_kwargs: object) -> None:
-        """Levanta um erro de transporte para simular uma falha na requisição.
-
-        Args:
-            _args: Argumentos posicionais (não utilizados).
-            _kwargs: Argumentos de palavra-chave (não utilizados).
-
-        """
+        """Fail request."""
         raise transport_error
 
     monkeypatch.setattr(ai, "urlopen", fail_request)
