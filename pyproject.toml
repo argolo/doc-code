@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Documentation",
     "Topic :: Software Development :: Quality Assurance",
     "Typing :: Typed",
@@ -63,7 +64,7 @@ doc_gub = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-config --strict-markers --cov=doc_gub --cov-fail-under=80"
+addopts = "-q --strict-config --strict-markers --cov=doc_gub --cov-fail-under=85"
 
 [tool.coverage.run]
 branch = true
