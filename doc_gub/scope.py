@@ -13,6 +13,19 @@ SUPPORTED_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx"}
 DEFAULT_EXCLUDED_PARTS = {".git", "node_modules", "dist", "build", ".venv", "venv", "__pycache__"}
 
 
+def _is_oversized(repo: GitRepo, relative: str, settings: Settings) -> bool:
+    """Return whether an existing supported file exceeds the byte limit."""
+    path = repo.root / relative
+    try:
+        return (
+            path.is_file()
+            and path.suffix.lower() in SUPPORTED_SUFFIXES
+            and path.stat().st_size > settings.max_file_bytes
+        )
+    except OSError:
+        return False
+
+
 def _eligible(repo: GitRepo, relative: str, settings: Settings) -> bool:
     """Verifica se um caminho relativo é elegível para inclusão, considerando extensões suportadas, exclusões padrão, regras personalizadas de exclusão/inclusão e a estrutura do repositório.
 
@@ -25,7 +38,9 @@ def _eligible(repo: GitRepo, relative: str, settings: Settings) -> bool:
     path = repo.root / relative
     if not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
         return False
-    if any(part in DEFAULT_EXCLUDED_PARTS for part in path.parts):
+    if _is_oversized(repo, relative, settings):
+        return False
+    if any(part in DEFAULT_EXCLUDED_PARTS for part in Path(relative).parts):
         return False
     normalized = relative.replace("\\", "/")
     if any(
@@ -60,8 +75,14 @@ def resolve(repo: GitRepo, requested: list[Path] | None, settings: Settings) -> 
         candidates = repo.changed_files()
     else:
         candidates = [item.relative_to(repo.root).as_posix() for item in repo.root.rglob("*")]
-    files = sorted({item for item in candidates if _eligible(repo, item, settings)})
+    unique_candidates = set(candidates)
+    files = sorted(item for item in unique_candidates if _eligible(repo, item, settings))
     if not files:
+        oversized = sorted(
+            item for item in unique_candidates if _is_oversized(repo, item, settings)
+        )
+        if oversized:
+            raise DocGubError(f"No eligible files: exceeds max_file_bytes: {', '.join(oversized)}.")
         raise DocGubError("No eligible Python, JavaScript, or TypeScript files found.")
     if len(files) > settings.max_files_per_request:
         raise DocGubError(
