@@ -34,7 +34,7 @@ install:
 	$(UV) sync --locked --all-extras
 
 clean:
-	rm -rf -- build dist doc_gub.egg-info .pytest_cache .ruff_cache .mypy_cache
+	rm -rf -- build dist doc_code.egg-info .pytest_cache .ruff_cache .mypy_cache
 	rm -f -- .coverage
 
 clear: clean
@@ -46,7 +46,7 @@ test: install
 	$(UV) run pytest
 
 coverage: install
-	$(UV) run pytest --cov=doc_gub --cov-report=term-missing
+	$(UV) run pytest --cov=doc_code --cov-report=term-missing
 
 lint: install
 	$(UV) run ruff check .
@@ -56,7 +56,7 @@ format: install
 	$(UV) run ruff format .
 
 typecheck: install
-	$(UV) run mypy doc_gub tests
+	$(UV) run mypy doc_code tests
 
 audit: install
 	$(UV) run python -m pip_audit --local --skip-editable
