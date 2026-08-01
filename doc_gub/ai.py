@@ -15,31 +15,12 @@ from .symbols import Documentation, Symbol
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate the approximate token count.
-
-    Estima o número aproximado de tokens necessários para uma determinada string, utilizando um
-    cálculo baseado na codificação UTF-8.
-
-    Essencial para verificar limites de contexto da API.
-
-    Args:
-            text: Description of text.
-    """
+    """Estimate tokens conservatively from the UTF-8 byte length."""
     return ceil(len(text.encode("utf-8")) / 3)
 
 
 def prompt(content: str, symbols: list[Symbol], language: str = "English") -> str:
-    """Build the provider prompt.
-
-    Constrói um prompt formatado e detalhado, incluindo instruções específicas (JSON output),
-    símbolos solicitados e o conteúdo fonte, otimizado para ser enviado a modelos de linguagem de
-    IA.
-
-    Args:
-        content: Description of content.
-        symbols: Description of symbols.
-        language: Description of language.
-    """
+    """Build the strict JSON prompt sent to a provider."""
     names = [{"symbol": item.name, "kind": item.kind, "arguments": item.args} for item in symbols]
     return (
         "Return only a JSON object mapping each requested symbol to an object with "
@@ -56,16 +37,7 @@ def prompt(content: str, symbols: list[Symbol], language: str = "English") -> st
 def _post(
     url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int
 ) -> dict[str, Any]:
-    """Função utilitária que realiza requisições HTTP POST para endpoints externos (APIs).
-
-    Envia payloads JSON, gerencia cabeçalhos e converte falhas de transporte em erros de domínio.
-
-    Args:
-        url: Endereço do provedor.
-        payload: Corpo JSON da requisição.
-        headers: Cabeçalhos HTTP.
-        timeout: Tempo limite em segundos.
-    """
+    """Post JSON and convert transport or decoding failures to domain errors."""
     try:
         with urlopen(
             Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST"),
@@ -88,15 +60,7 @@ def _post(
 def documentation_for(
     content: str, symbols: list[Symbol], settings: Settings
 ) -> dict[str, Documentation]:
-    """Função principal que orquestra a geração completa da documentação.
-
-    Valida os limites de tokens e retorna descrições factuais para cada símbolo solicitado.
-
-    Args:
-        content: Conteúdo-fonte usado como contexto.
-        symbols: Símbolos que devem ser documentados.
-        settings: Configuração do provedor e dos limites.
-    """
+    """Generate validated documentation for the requested symbols."""
     body = prompt(content, symbols, settings.language)
     tokens = estimate_tokens(body)
     if (
@@ -115,28 +79,28 @@ def documentation_for(
             {
                 "model": settings.model,
                 "messages": [{"role": "user", "content": body}],
-                "max_tokens": settings.max_output_tokens,
+                "max_completion_tokens": settings.max_output_tokens,
                 "temperature": settings.temperature,
             },
             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             settings.timeout_seconds,
         )
-        answer = data["choices"][0]["message"]["content"]
+        answer = _provider_answer(data, "openai")
     elif settings.provider == "gemini":
         key = os.getenv("GEMINI_API_KEY")
         if not key:
             raise DocGubError("GEMINI_API_KEY is not configured.")
-        endpoint = (
-            settings.endpoint
-            or f"https://generativelanguage.googleapis.com/v1beta/models/{settings.model}:generateContent?key={key}"
+        endpoint = settings.endpoint or (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{settings.model}:generateContent"
         )
         data = _post(
             endpoint,
             {"contents": [{"parts": [{"text": body}]}]},
-            {"Content-Type": "application/json"},
+            {"Content-Type": "application/json", "x-goog-api-key": key},
             settings.timeout_seconds,
         )
-        answer = data["candidates"][0]["content"]["parts"][0]["text"]
+        answer = _provider_answer(data, "gemini")
     else:
         data = _post(
             settings.endpoint or "http://localhost:11434/api/generate",
@@ -153,8 +117,24 @@ def documentation_for(
             {"Content-Type": "application/json"},
             settings.timeout_seconds,
         )
-        answer = data["response"]
+        answer = _provider_answer(data, "ollama")
     return _documentation_response(answer, symbols)
+
+
+def _provider_answer(data: dict[str, Any], provider: str) -> str:
+    """Extract provider text while keeping malformed envelopes inside the domain boundary."""
+    try:
+        if provider == "openai":
+            answer = data["choices"][0]["message"]["content"]
+        elif provider == "gemini":
+            answer = data["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            answer = data["response"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise AIProviderError(f"The {provider} provider returned an invalid response.") from exc
+    if not isinstance(answer, str):
+        raise AIProviderError(f"The {provider} provider returned an invalid response.")
+    return answer
 
 
 def _documentation_response(answer: str, symbols: list[Symbol]) -> dict[str, Documentation]:
@@ -175,28 +155,28 @@ def _documentation_response(answer: str, symbols: list[Symbol]) -> dict[str, Doc
     for name, value in parsed.items():
         if not isinstance(name, str) or name not in requested:
             raise InvalidAIResponseError("The AI response contains an unexpected symbol.")
-        if isinstance(value, str):
-            normalized[name] = Documentation(value)
-            continue
-        if not isinstance(value, dict):
-            raise InvalidAIResponseError("Each symbol must contain documentation details.")
-        description = value.get("description")
-        arguments = value.get("arguments", {})
-        if (
-            not isinstance(description, str)
-            or not isinstance(arguments, dict)
-            or not all(
-                isinstance(argument, str) and isinstance(argument_description, str)
-                for argument, argument_description in arguments.items()
-            )
-        ):
-            raise InvalidAIResponseError(
-                "Each symbol must contain a string description and string argument descriptions."
-            )
-        expected_arguments = set(requested[name].args)
-        if set(arguments) != expected_arguments:
-            raise InvalidAIResponseError(
-                f"Documentation for `{name}` must describe every requested argument."
-            )
-        normalized[name] = Documentation(description, arguments)
+        normalized[name] = _normalize_documentation(name, value, requested[name])
     return normalized
+
+
+def _normalize_documentation(name: str, value: Any, symbol: Symbol) -> Documentation:
+    """Validate one symbol's generated description and argument mapping."""
+    if isinstance(value, str):
+        return Documentation(value)
+    if not isinstance(value, dict):
+        raise InvalidAIResponseError("Each symbol must contain documentation details.")
+    description = value.get("description")
+    arguments = value.get("arguments", {})
+    valid_arguments = isinstance(arguments, dict) and all(
+        isinstance(argument, str) and isinstance(argument_description, str)
+        for argument, argument_description in arguments.items()
+    )
+    if not isinstance(description, str) or not valid_arguments:
+        raise InvalidAIResponseError(
+            "Each symbol must contain a string description and string argument descriptions."
+        )
+    if set(arguments) != set(symbol.args):
+        raise InvalidAIResponseError(
+            f"Documentation for `{name}` must describe every requested argument."
+        )
+    return Documentation(description, arguments)
