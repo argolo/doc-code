@@ -1,12 +1,12 @@
-# Projeto `doc-gub`
+# Doc Code
 
 ## Resumo
 
-Criar uma CLI Python para gerar e aplicar documentação com IA em arquivos Python, JavaScript e TypeScript. Ela seguirá o padrão operacional do Commitar: seleção segura de arquivos, prévia por padrão, diff unificado, confirmação única antes de alterar arquivos, OpenAI/Gemini/Ollama e configuração em `.doc-gub.toml`.
+Criar uma CLI Python para gerar e aplicar documentação com IA em arquivos Python, JavaScript e TypeScript. Ela seguirá o padrão operacional do Commitar: seleção segura de arquivos, prévia por padrão, diff unificado, confirmação única antes de alterar arquivos, OpenAI/Gemini/Ollama e configuração em `.doc-code.toml`.
 
 ## Funcionamento e interface
 
-- Comando principal: `doc-gub [PATH]`.
+- Comando principal: `doc-code [PATH]`.
   - Sem `PATH`, usa o modo configurado: mudanças Git (prioriza staging; depois arquivos modificados) ou varredura do repositório.
   - Com `PATH`, processa o arquivo ou diretório indicado, como no Commitar.
 - Modos: `--output preview` (padrão), `--output apply` e `--dry-run` como alias de prévia; `--yes/-y` elimina a confirmação no modo apply.
@@ -16,12 +16,12 @@ Criar uma CLI Python para gerar e aplicar documentação com IA em arquivos Pyth
   - `--selection changes|repository`: selecionar mudanças Git ou varrer o repositório; ambos também configuráveis no TOML.
   - `--format google|numpy|sphinx` para Python; JSDoc para JS/TS.
   - Reutilizar `--provider`, `--model`, `--timeout-seconds`, `--max-input-tokens`, `--context-window-tokens` e `--config`.
-- Subcomandos: `doc-gub config init` cria `.doc-gub.toml`; `doc-gub config show` exibe a configuração efetiva sem credenciais.
+- Subcomandos: `doc-code config init` cria `.doc-code.toml`; `doc-code config show` exibe a configuração efetiva sem credenciais.
 
 ## Implementação
 
 - Estruturar o pacote como o Commitar: CLI Typer, carregamento de configuração, provedores de IA, seleção de escopo, geração de diff, aplicação e erros específicos.
-- Usar a mesma precedência: flags → `--config` → variáveis `DOC_GUB_*` → `.doc-gub.toml` → `~/.config/doc-gub/config.toml` → padrões.
+- Usar a mesma precedência: flags → `--config` → variáveis `DOC_CODE_*` → `.doc-code.toml` → `~/.config/doc-code/config.toml` → padrões.
 - Gerar docstrings para módulos, classes, métodos, funções e funções assíncronas Python; gerar JSDoc para funções, classes, métodos e funções arrow JS/TS.
 - Aplicar alterações por edição textual delimitada e diff unificado. Antes de gravar, confirmar que o arquivo não mudou desde a prévia; abortar aquele arquivo se houver divergência.
 - Ignorar por padrão arquivos Git-ignored, dependências, ambientes virtuais, builds, arquivos minificados e lockfiles. Permitir padrões adicionais de inclusão/exclusão em configuração.
@@ -66,6 +66,6 @@ exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js", "**
 
 ## Premissas
 
-- O nome público da CLI e do pacote será `doc-gub`.
+- O nome público da CLI e do pacote será `doc-code`.
 - A primeira versão edita apenas Python, JavaScript e TypeScript.
 - O modo padrão é `changes`, a cobertura padrão é `missing`, e a atualização de documentação existente preserva a descrição manual.
