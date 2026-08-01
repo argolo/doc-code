@@ -307,8 +307,8 @@ def _normalize_sequences(values: dict[str, Any]) -> None:
         raise DocGubError("`models` accepts at most three candidates.")
 
 
-def _normalize_temperature(value: Any) -> float:
-    """Validate and return a finite sampling temperature."""
+def _normalize_temperature(value: Any, provider: str) -> float:
+    """Validate and return a sampling temperature supported by the selected provider."""
     if isinstance(value, bool):
         raise DocGubError("`temperature` must be a finite number.")
     try:
@@ -317,6 +317,10 @@ def _normalize_temperature(value: Any) -> float:
         raise DocGubError("`temperature` must be a finite number.") from exc
     if not isfinite(temperature):
         raise DocGubError("`temperature` must be a finite number.")
+    if temperature < 0:
+        raise DocGubError("`temperature` must be non-negative.")
+    if provider in {"openai", "gemini"} and temperature > 2:
+        raise DocGubError(f"`temperature` must be between 0 and 2 for {provider}.")
     return temperature
 
 
@@ -333,11 +337,11 @@ def _validated_settings(values: dict[str, Any]) -> Settings:
     _normalize_sequences(values)
     for name in _POSITIVE_INTEGER_OPTIONS:
         values[name] = _positive_int(values[name], name)
-    values["temperature"] = _normalize_temperature(values["temperature"])
-    values["language"] = _non_empty_string(values["language"], "language")
-    values["model"] = _non_empty_string(values["model"], "model")
     for name, options in _CHOICE_OPTIONS.items():
         values[name] = _choice(values[name], name, options)
+    values["temperature"] = _normalize_temperature(values["temperature"], values["provider"])
+    values["language"] = _non_empty_string(values["language"], "language")
+    values["model"] = _non_empty_string(values["model"], "model")
     values["endpoint"] = _endpoint(values["endpoint"], values["provider"])
     if values["javascript_format"] != "jsdoc":
         raise DocGubError("`javascript_format` must be `jsdoc`.")
