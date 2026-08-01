@@ -14,7 +14,11 @@ from tree_sitter_typescript import language_tsx, language_typescript
 
 @dataclass(frozen=True)
 class Symbol:
-    """Uma classe de dados imutável usada para armazenar metadados sobre um símbolo (módulo, classe ou função) encontrado no código fonte."""
+    """Store metadata for a source symbol.
+
+    Uma classe de dados imutável usada para armazenar metadados sobre um símbolo (módulo, classe
+    ou função) encontrado no código fonte.
+    """
 
     name: str
     kind: str
@@ -70,12 +74,14 @@ def _python_arguments(arguments: ast.arguments) -> tuple[str, ...]:
 
 
 def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
-    """Analisa uma string de conteúdo Python e retorna uma lista de objetos Symbol que representam os símbolos definidos.
+    """Discover symbols in Python source code.
+
+    Analisa uma string de conteúdo Python e retorna uma lista de objetos Symbol que representam
+    os símbolos definidos.
 
     Args:
         content: Description of content.
         filename: Name reported when Python parsing fails.
-
     """
     tree = ast.parse(content, filename=filename)
     lines = content.splitlines()
@@ -96,12 +102,14 @@ def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
     )
 
     def visit(nodes: list[ast.stmt], prefix: str = "") -> None:
-        """Função auxiliar recursiva usada para percorrer nós AST e identificar símbolos aninhados (como métodos ou classes internas).
+        """Visit nested Python AST nodes recursively.
+
+        Função auxiliar recursiva usada para percorrer nós AST e identificar símbolos aninhados
+        (como métodos ou classes internas).
 
         Args:
             nodes: Description of nodes.
             prefix: Description of prefix.
-
         """
         for node in nodes:
             if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -188,22 +196,46 @@ def _javascript_symbol(
     )
 
 
-def javascript_symbols(content: str, suffix: str = ".js") -> list[Symbol]:
+def _raise_javascript_syntax_error(root: Node, content: str, filename: str) -> None:
+    """Raise a Python-style syntax error for the first malformed AST node."""
+    if not root.has_error:
+        return
+    malformed: list[Node] = []
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.is_error or node.is_missing:
+            malformed.append(node)
+        pending.extend(child for child in node.children if child.has_error)
+    target = min(malformed or [root], key=lambda node: node.start_byte)
+    row, column = target.start_point
+    lines = content.splitlines()
+    source_line = lines[row] if row < len(lines) else ""
+    raise SyntaxError(
+        "invalid JavaScript/TypeScript syntax",
+        (filename, row + 1, column + 1, source_line + "\n"),
+    )
+
+
+def javascript_symbols(
+    content: str, suffix: str = ".js", filename: str = "<unknown>"
+) -> list[Symbol]:
     """Discover JavaScript and TypeScript declarations through their concrete syntax tree."""
     source = content.encode()
     language = _TSX if suffix == ".tsx" else _TYPESCRIPT if suffix == ".ts" else _JAVASCRIPT
     tree = Parser(language).parse(source)
+    _raise_javascript_syntax_error(tree.root_node, content, filename)
     lines = content.splitlines()
     found: list[Symbol] = []
 
     def visit(node: Node, prefix: str = "") -> None:
-        """Visita um nó (node) e registra símbolos JavaScript encontrados nele, anexando o nome do
-        prefixo fornecido.
+        """Visita um nó e registra os símbolos JavaScript encontrados.
+
+        Anexa o prefixo de escopo fornecido ao nome de cada símbolo.
 
         Args:
             node: O nó AST a ser visitado.
             prefix: O prefixo de escopo para os nomes dos símbolos encontrados.
-
         """
         declaration = node
         if node.type == "export_statement":
@@ -227,6 +259,25 @@ def javascript_symbols(content: str, suffix: str = ".js") -> list[Symbol]:
                                 lines,
                             )
                         )
+                        for descendant in child.named_children:
+                            visit(descendant, name)
+                    elif child.type == "public_field_definition":
+                        value = child.child_by_field_name("value")
+                        if value and value.type == "arrow_function":
+                            field_name = _node_text(child.child_by_field_name("name"), source)
+                            found.append(
+                                _javascript_symbol(
+                                    child,
+                                    f"{name}.{field_name}",
+                                    "function",
+                                    value.child_by_field_name("parameters")
+                                    or value.child_by_field_name("parameter"),
+                                    source,
+                                    lines,
+                                )
+                            )
+                    else:
+                        visit(child, name)
             return
         if declaration.type in {"function_declaration", "generator_function_declaration"}:
             raw_name = _node_text(declaration.child_by_field_name("name"), source)
@@ -249,7 +300,8 @@ def javascript_symbols(content: str, suffix: str = ".js") -> list[Symbol]:
                     and value
                     and value.type == "arrow_function"
                 ):
-                    name = _node_text(declarator.child_by_field_name("name"), source)
+                    raw_name = _node_text(declarator.child_by_field_name("name"), source)
+                    name = f"{prefix}.{raw_name}" if prefix else raw_name
                     found.append(
                         _javascript_symbol(
                             declarator,
@@ -270,28 +322,32 @@ def javascript_symbols(content: str, suffix: str = ".js") -> list[Symbol]:
 
 
 def discover(content: str, suffix: str, filename: str = "<unknown>") -> list[Symbol]:
-    """Determina qual função de análise de símbolos deve ser utilizada (`python` ou `javascript`) com base na extensão do arquivo fornecida.
+    """Select symbol discovery based on the file suffix.
+
+    Determina qual função de análise de símbolos deve ser utilizada (`python` ou `javascript`)
+    com base na extensão do arquivo fornecida.
 
     Args:
         content: Description of content.
         suffix: Description of suffix.
         filename: Name reported when Python parsing fails.
-
     """
     return (
         python_symbols(content, filename)
         if suffix == ".py"
-        else javascript_symbols(content, suffix)
+        else javascript_symbols(content, suffix, filename)
     )
 
 
 def eligible(symbol: Symbol, coverage: str) -> bool:
-    """Verifica se um símbolo é considerado elegível para documentação, geralmente baseado em critérios de cobertura de testes ('all').
+    """Return whether a symbol needs documentation.
+
+    Verifica se um símbolo é considerado elegível para documentação, geralmente baseado em
+    critérios de cobertura de testes ('all').
 
     Args:
         symbol: Description of symbol.
         coverage: Description of coverage.
-
     """
     return coverage == "all" or not symbol.has_doc
 
@@ -299,9 +355,9 @@ def eligible(symbol: Symbol, coverage: str) -> bool:
 def needs_documentation(symbol: Symbol, coverage: str, existing_docs: str) -> bool:
     """Return whether a symbol is eligible and may have its docs generated.
 
-    Existing documentation is never sent to a provider when ``existing_docs`` is
-    ``"preserve"``. This rule is independent of request scope: a scope only
-    changes the source sent with a request, not which symbols are candidates.
+    Existing documentation is never sent to a provider when ``existing_docs`` is ``"preserve"``.
+    This rule is independent of request scope: a scope only changes the source sent with a request,
+    not which symbols are candidates.
     """
     return eligible(symbol, coverage) and (not symbol.has_doc or existing_docs == "replace")
 
@@ -311,9 +367,9 @@ def source_for_symbol(
 ) -> str:
     """Return the smallest self-contained source region available for one symbol.
 
-    Python symbols have AST-derived end lines. JavaScript discovery is intentionally
-    lightweight, so its region ends when its braces balance (or at a semicolon for
-    expression-bodied arrow functions). Module documentation remains file-scoped.
+    Python symbols have AST-derived end lines. JavaScript discovery is intentionally lightweight, so
+    its region ends when its braces balance (or at a semicolon for expression-bodied arrow
+    functions). Module documentation remains file-scoped.
     """
     if symbol.kind == "module":
         return _module_outline(content, suffix, filename)
@@ -411,7 +467,10 @@ def render(
     line_length: int = 100,
     indentation: str = "",
 ) -> str:
-    """Formata a descrição textual de um símbolo (docstring) no formato apropriado, seja ele Python docstrings ou JSDoc.
+    """Render documentation for a source symbol.
+
+    Formata a descrição textual de um símbolo (docstring) no formato apropriado, seja ele Python
+    docstrings ou JSDoc.
 
     Args:
         symbol: Description of symbol.
@@ -420,7 +479,6 @@ def render(
         python_format: Description of python_format.
         line_length: Maximum allowed line length for the target project.
         indentation: Indentation that will precede the rendered documentation.
-
     """
     if isinstance(documentation, Documentation):
         description = documentation.description
