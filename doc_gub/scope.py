@@ -27,13 +27,15 @@ def _is_oversized(repo: GitRepo, relative: str, settings: Settings) -> bool:
 
 
 def _eligible(repo: GitRepo, relative: str, settings: Settings) -> bool:
-    """Verifica se um caminho relativo é elegível para inclusão, considerando extensões suportadas, exclusões padrão, regras personalizadas de exclusão/inclusão e a estrutura do repositório.
+    """Return whether a relative path is eligible.
+
+    Verifica se um caminho relativo é elegível para inclusão, considerando extensões suportadas,
+    exclusões padrão, regras personalizadas de exclusão/inclusão e a estrutura do repositório.
 
     Args:
         repo: Description of repo.
         relative: Description of relative.
         settings: Description of settings.
-
     """
     path = repo.root / relative
     if not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
@@ -58,7 +60,6 @@ def resolve(repo: GitRepo, requested: list[Path] | None, settings: Settings) -> 
         repo: Description of repo.
         requested: Description of requested.
         settings: Description of settings.
-
     """
     if requested:
         candidates: list[str] = []
