@@ -52,8 +52,10 @@ class GitRepo:
             raise DocGubError("The path must exist inside the Git worktree.") from exc
 
     def changed_files(self) -> list[str]:
-        """Retorna uma lista de nomes de arquivos que foram alterados no repositório, tanto os que estão no estágio quanto aqueles que ainda não foram comitados."""
+        """Return staged or modified files together with untracked non-ignored files."""
         staged = self.run("diff", "--cached", "--name-only", "-z").stdout.split("\0")
-        return [name for name in staged if name] or [
+        tracked = [name for name in staged if name] or [
             name for name in self.run("diff", "--name-only", "-z").stdout.split("\0") if name
         ]
+        untracked = self.run("ls-files", "--others", "--exclude-standard", "-z").stdout.split("\0")
+        return list(dict.fromkeys([*tracked, *(name for name in untracked if name)]))
