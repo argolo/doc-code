@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,14 @@ from doc_code.git import GitRepo
 from doc_code.scope import resolve
 
 
+class ScopeRepo(GitRepo):
+    """Provide a Git repository double with no ignored paths by default."""
+
+    def ignored_paths(self, _paths: Iterable[str]) -> set[str]:
+        """Return no ignored paths for isolated scope tests."""
+        return set()
+
+
 def test_resolve_combines_multiple_files_and_directories_without_duplicates(tmp_path: Path) -> None:
     """Verify resolve combines multiple files and directories without duplicates."""
     first = tmp_path / "first.py"
@@ -22,7 +31,7 @@ def test_resolve_combines_multiple_files_and_directories_without_duplicates(tmp_
     first.write_text("pass\n", encoding="utf-8")
     second.write_text("pass\n", encoding="utf-8")
 
-    class Repo(GitRepo):
+    class Repo(ScopeRepo):
         """Provide a repository test double."""
 
         def __init__(self) -> None:
@@ -44,7 +53,7 @@ def test_resolve_rejects_oversized_files_before_they_are_read(tmp_path: Path) ->
     source = tmp_path / "large.py"
     source.write_text("x" * 20, encoding="utf-8")
 
-    class Repo(GitRepo):
+    class Repo(ScopeRepo):
         """Provide a repository test double."""
 
         def __init__(self) -> None:
@@ -66,7 +75,7 @@ def test_default_exclusions_do_not_use_directories_above_the_repository(tmp_path
     source = root / "module.py"
     source.write_text("pass\n", encoding="utf-8")
 
-    class Repo(GitRepo):
+    class Repo(ScopeRepo):
         """Provide a repository test double."""
 
         def __init__(self) -> None:
@@ -83,7 +92,7 @@ def test_default_exclusions_do_not_use_directories_above_the_repository(tmp_path
 def test_resolve_handles_a_changed_file_removed_before_selection(tmp_path: Path) -> None:
     """Verify resolve handles a changed file removed before selection."""
 
-    class Repo(GitRepo):
+    class Repo(ScopeRepo):
         """Provide a repository test double."""
 
         def __init__(self) -> None:
@@ -108,7 +117,7 @@ def test_resolve_rejects_source_symlinks(tmp_path: Path) -> None:
     external.write_text("def external():\n    pass\n", encoding="utf-8")
     (root / "linked.py").symlink_to(external)
 
-    repo = GitRepo.__new__(GitRepo)
+    repo = ScopeRepo.__new__(ScopeRepo)
     repo.root = root
 
     with pytest.raises(DocGubError, match="No eligible Python"):
@@ -124,7 +133,7 @@ def test_include_double_star_matches_root_and_nested_files(tmp_path: Path) -> No
     root_source.write_text("pass\n", encoding="utf-8")
     nested_source.write_text("pass\n", encoding="utf-8")
     ignored.write_text("const value = true;\n", encoding="utf-8")
-    repo = GitRepo.__new__(GitRepo)
+    repo = ScopeRepo.__new__(ScopeRepo)
     repo.root = tmp_path
 
     assert resolve(repo, [tmp_path], load(tmp_path, include=("**/*.py",))) == [
@@ -142,7 +151,7 @@ def test_repository_walk_prunes_default_excluded_directories(
     dependency.parent.mkdir()
     source.write_text("pass\n", encoding="utf-8")
     dependency.write_text("pass\n", encoding="utf-8")
-    repo = GitRepo.__new__(GitRepo)
+    repo = ScopeRepo.__new__(ScopeRepo)
     repo.root = tmp_path
     inspected: list[str] = []
     original = scope._eligible
@@ -156,3 +165,24 @@ def test_repository_walk_prunes_default_excluded_directories(
 
     assert resolve(repo, None, load(tmp_path, selection="repository")) == ["source.py"]
     assert not any("node_modules" in candidate for candidate in inspected)
+
+
+def test_resolve_excludes_paths_ignored_by_git(tmp_path: Path) -> None:
+    """Verify Git-ignored paths are excluded from an explicit directory scope."""
+    source = tmp_path / "source.py"
+    ignored = tmp_path / "generated.py"
+    source.write_text("pass\n", encoding="utf-8")
+    ignored.write_text("pass\n", encoding="utf-8")
+
+    class Repo(ScopeRepo):
+        """Provide a repository double with one ignored source file."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+        def ignored_paths(self, paths: Iterable[str]) -> set[str]:
+            """Return generated Python files as ignored."""
+            return {path for path in paths if path == "generated.py"}
+
+    assert resolve(Repo(), [tmp_path], load(tmp_path, selection="repository")) == ["source.py"]
