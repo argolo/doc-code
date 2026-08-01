@@ -2,6 +2,7 @@ import asyncio
 import math
 from datetime import datetime
 
+
 def fibonacci(n: int) -> list[int]:
     if n <= 0:
         return []
@@ -10,10 +11,11 @@ def fibonacci(n: int) -> list[int]:
         seq.append(seq[-1] + seq[-2])
     return seq[:n]
 
+
 def calcular_imc(peso: float, altura: float) -> tuple[float, str]:
     if altura <= 0 or peso <= 0:
         raise ValueError("Peso e altura devem ser maiores que zero.")
-    imc = peso / (altura ** 2)
+    imc = peso / (altura**2)
     if imc < 18.5:
         classificacao = "Abaixo do peso"
     elif imc < 25:
@@ -24,8 +26,10 @@ def calcular_imc(peso: float, altura: float) -> tuple[float, str]:
         classificacao = "Obesidade"
     return round(imc, 2), classificacao
 
+
 def calcular_metro_quadrado(largura: float, comprimento: float) -> float:
     return round(largura * comprimento, 2)
+
 
 def fase_da_lua(data: datetime | None = None) -> str:
     if data is None:
@@ -53,6 +57,7 @@ def fase_da_lua(data: datetime | None = None) -> str:
     else:
         return "Lua Nova"
 
+
 async def async_eh_primo(numero: int) -> bool:
     await asyncio.sleep(0.05)
     if numero < 2:
@@ -61,6 +66,7 @@ async def async_eh_primo(numero: int) -> bool:
         if numero % i == 0:
             return False
     return True
+
 
 async def async_converter_temperatura(valor: float, de: str = "C", para: str = "F") -> float:
     await asyncio.sleep(0.01)
@@ -73,7 +79,7 @@ async def async_converter_temperatura(valor: float, de: str = "C", para: str = "
         celsius = valor - 273.15
     else:
         raise ValueError("Unidade de origem inválida.")
-        
+
     if para == "C":
         return round(celsius, 2)
     elif para == "F":
@@ -83,6 +89,7 @@ async def async_converter_temperatura(valor: float, de: str = "C", para: str = "
     else:
         raise ValueError("Unidade de destino inválida.")
 
+
 class CalculadoraFinanceira:
     @staticmethod
     def juros_compostos(capital: float, taxa_anual: float, tempo_anos: int) -> float:
@@ -90,14 +97,17 @@ class CalculadoraFinanceira:
         return round(montante, 2)
 
     @staticmethod
-    async def async_simular_investimento(aporte_mensal: float, taxa_mensal: float, meses: int) -> list[float]:
+    async def async_simular_investimento(
+        aporte_mensal: float, taxa_mensal: float, meses: int
+    ) -> list[float]:
         saldo = 0.0
         historico = []
-        for mes in range(1, meses + 1):
+        for _mes in range(1, meses + 1):
             await asyncio.sleep(0.01)
             saldo = (saldo + aporte_mensal) * (1 + (taxa_mensal / 100))
             historico.append(round(saldo, 2))
         return historico
+
 
 class UtilitarioTexto:
     def __init__(self, texto: str):
@@ -117,6 +127,7 @@ class UtilitarioTexto:
                 frequencia[char] = frequencia.get(char, 0) + 1
         return dict(sorted(frequencia.items(), key=lambda item: item[1], reverse=True))
 
+
 async def main():
     print(fibonacci(10))
     print(calcular_imc(75, 1.75))
@@ -129,6 +140,7 @@ async def main():
     util = UtilitarioTexto("Python é uma linguagem incrível.\nSuporta sync e async!")
     print(util.estatisticas())
     print(await util.async_frequencia_caracteres())
+
 
 if __name__ == "__main__":
     asyncio.run(main())
