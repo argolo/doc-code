@@ -85,7 +85,12 @@ def resolve(repo: GitRepo, requested: list[Path] | None, settings: Settings) -> 
     else:
         candidates = list(_walk_candidates(repo.root, repo.root))
     unique_candidates = set(candidates)
-    files = sorted(item for item in unique_candidates if _eligible(repo, item, settings))
+    ignored_candidates = repo.ignored_paths(unique_candidates)
+    files = sorted(
+        item
+        for item in unique_candidates
+        if item not in ignored_candidates and _eligible(repo, item, settings)
+    )
     if not files:
         oversized = sorted(
             item for item in unique_candidates if _is_oversized(repo, item, settings)
