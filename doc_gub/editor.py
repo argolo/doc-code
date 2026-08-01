@@ -40,16 +40,18 @@ class PreparedFile:
     symbols: tuple[Symbol, ...]
     changed: tuple[Symbol, ...]
     ignored: tuple[Symbol, ...]
+    display_path: Path | None = None
 
     @property
     def diff(self) -> str:
         """Return the unified diff for the prepared edit."""
+        display_path = self.display_path or self.path
         return "".join(
             difflib.unified_diff(
                 self.before.splitlines(keepends=True),
                 self.after.splitlines(keepends=True),
-                fromfile=f"a/{self.path}",
-                tofile=f"b/{self.path}",
+                fromfile=f"a/{display_path.as_posix()}",
+                tofile=f"b/{display_path.as_posix()}",
             )
         )
 
@@ -129,6 +131,13 @@ def _is_inline_python_suite(lines: list[str], symbol: Symbol) -> bool:
     return ":" in header and bool(header.rsplit(":", maxsplit=1)[1].strip())
 
 
+def can_insert_documentation(content: str, symbol: Symbol, suffix: str) -> bool:
+    """Return whether a symbol can receive documentation without rewriting its code."""
+    if suffix != ".py" or symbol.kind == "module" or symbol.has_doc:
+        return True
+    return not _is_inline_python_suite(content.splitlines(keepends=True), symbol)
+
+
 def _documentation_indent(lines: list[str], symbol: Symbol, suffix: str) -> str:
     """Use the body's existing indentation for Python docstrings."""
     if suffix != ".py" or symbol.kind == "module":
@@ -146,32 +155,66 @@ def _documentation_indent(lines: list[str], symbol: Symbol, suffix: str) -> str:
 
 
 def _python_rendering_options(path: Path, fallback_format: str) -> tuple[int, str]:
-    """Read Ruff line length and pydocstyle convention from the nearest Python project."""
+    """Read Ruff line length and pydocstyle convention from the target project."""
     for directory in (path.parent, *path.parents):
-        config = directory / "pyproject.toml"
-        if not config.is_file():
-            continue
-        try:
-            with config.open("rb") as handle:
-                data = tomllib.load(handle)
-        except (OSError, tomllib.TOMLDecodeError):
-            return _DEFAULT_PYTHON_LINE_LENGTH, fallback_format
+        for name in (".ruff.toml", "ruff.toml", "pyproject.toml"):
+            ruff = _ruff_settings(directory / name)
+            if ruff is None:
+                continue
+            line_length = ruff.get("line-length")
+            normalized_line_length = (
+                line_length
+                if isinstance(line_length, int) and line_length > 0
+                else _DEFAULT_PYTHON_LINE_LENGTH
+            )
+            lint = ruff.get("lint", {})
+            pydocstyle = lint.get("pydocstyle", {}) if isinstance(lint, dict) else {}
+            convention = pydocstyle.get("convention") if isinstance(pydocstyle, dict) else None
+            python_format = convention if convention in {"google", "numpy"} else fallback_format
+            return normalized_line_length, python_format
+    return _DEFAULT_PYTHON_LINE_LENGTH, fallback_format
+
+
+def _ruff_settings(config: Path, seen: frozenset[Path] = frozenset()) -> dict[str, object] | None:
+    """Load one Ruff configuration, including its optional extended configuration."""
+    if not config.is_file():
+        return None
+    resolved = config.resolve()
+    if resolved in seen:
+        return None
+    try:
+        with config.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    if config.name == "pyproject.toml":
         tool = data.get("tool", {})
         ruff = tool.get("ruff", {}) if isinstance(tool, dict) else {}
-        if not isinstance(ruff, dict):
-            return _DEFAULT_PYTHON_LINE_LENGTH, fallback_format
-        line_length = ruff.get("line-length")
-        normalized_line_length = (
-            line_length
-            if isinstance(line_length, int) and line_length > 0
-            else _DEFAULT_PYTHON_LINE_LENGTH
-        )
-        lint = ruff.get("lint", {})
-        pydocstyle = lint.get("pydocstyle", {}) if isinstance(lint, dict) else {}
-        convention = pydocstyle.get("convention") if isinstance(pydocstyle, dict) else None
-        python_format = convention if convention in {"google", "numpy"} else fallback_format
-        return normalized_line_length, python_format
-    return _DEFAULT_PYTHON_LINE_LENGTH, fallback_format
+        if not ruff:
+            return None
+    else:
+        ruff = data
+    if not isinstance(ruff, dict):
+        return None
+    extend = ruff.get("extend")
+    inherited: dict[str, object] = {}
+    if isinstance(extend, str) and extend:
+        inherited = _ruff_settings(config.parent / extend, seen | {resolved}) or {}
+    return _merge_ruff_settings(inherited, ruff)
+
+
+def _merge_ruff_settings(
+    inherited: dict[str, object], configured: dict[str, object]
+) -> dict[str, object]:
+    """Overlay nested Ruff settings while retaining inherited pydocstyle options."""
+    merged = dict(inherited)
+    for key, value in configured.items():
+        previous = merged.get(key)
+        if isinstance(previous, dict) and isinstance(value, dict):
+            merged[key] = _merge_ruff_settings(previous, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _rendering_options(path: Path, settings: Settings) -> tuple[int, str]:
@@ -214,22 +257,7 @@ def _pep257_separator(
 
 def _validate_javascript(content: str, suffix: str, path: Path) -> None:
     """Parse generated JS/TS before it can be applied to the working tree."""
-    if suffix == ".js":
-        runtime = shutil.which("node")
-        if not runtime:
-            raise DocGubError(
-                f"{path}: JavaScript validation requires `node` on PATH; no file was changed."
-            )
-        command = [runtime, "--check"]
-    else:
-        compiler = shutil.which("tsc")
-        if not compiler:
-            raise DocGubError(
-                f"{path}: TypeScript validation requires `tsc` on PATH; no file was changed."
-            )
-        command = [compiler, "--noEmit", "--noCheck", "--pretty", "false", "--allowJs"]
-        if suffix in {".jsx", ".tsx"}:
-            command.extend(["--jsx", "preserve"])
+    command = validation_command(suffix, path)
 
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", suffix=suffix, prefix="doc-gub-", delete=False
@@ -251,6 +279,27 @@ def _validate_javascript(content: str, suffix: str, path: Path) -> None:
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip()
         raise DocGubError(f"{path}: generated documentation failed {suffix} validation: {detail}")
+
+
+def validation_command(suffix: str, path: Path) -> list[str]:
+    """Return the validation command required for a JavaScript-family source file."""
+    if suffix == ".js":
+        runtime = shutil.which("node")
+        if not runtime:
+            raise DocGubError(
+                f"{path}: JavaScript validation requires `node` on PATH; no file was changed."
+            )
+        command = [runtime, "--check"]
+    else:
+        compiler = shutil.which("tsc")
+        if not compiler:
+            raise DocGubError(
+                f"{path}: TypeScript validation requires `tsc` on PATH; no file was changed."
+            )
+        command = [compiler, "--noEmit", "--noCheck", "--pretty", "false", "--allowJs"]
+        if suffix in {".jsx", ".tsx"}:
+            command.extend(["--jsx", "preserve"])
+    return command
 
 
 def _selected_symbols(
@@ -282,7 +331,7 @@ def _insert_documentation(
 ) -> bool:
     """Render and insert one symbol's documentation, returning whether it changed."""
     if path.suffix == ".py" and not symbol.has_doc and symbol.kind != "module":
-        if _is_inline_python_suite(lines, symbol):
+        if not can_insert_documentation("".join(lines), symbol, path.suffix):
             return False
     indentation = _documentation_indent(lines, symbol, path.suffix)
     documentation = render(
@@ -342,6 +391,7 @@ def prepare(
     descriptions: Mapping[str, str | Documentation],
     settings: Settings,
     selected_symbols: list[Symbol] | None = None,
+    display_path: Path | None = None,
 ) -> PreparedFile:
     """Prepare and validate an edit, optionally limited to generated symbols."""
     if path.is_symlink():
@@ -371,7 +421,14 @@ def prepare(
     _validate_edit(before, after, path)
     changed = tuple(item for item in selected if item not in ignored)
     return PreparedFile(
-        path, before, after, fingerprint(before), tuple(symbols), changed, tuple(ignored)
+        path,
+        before,
+        after,
+        fingerprint(before),
+        tuple(symbols),
+        changed,
+        tuple(ignored),
+        display_path,
     )
 
 
