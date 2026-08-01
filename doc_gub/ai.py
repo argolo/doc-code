@@ -15,23 +15,30 @@ from .symbols import Documentation, Symbol
 
 
 def estimate_tokens(text: str) -> int:
-    """Estima o número aproximado de tokens necessários para uma determinada string, utilizando um cálculo baseado na codificação UTF-8. Essencial para verificar limites de contexto da API.
+    """Estimate the approximate token count.
+
+    Estima o número aproximado de tokens necessários para uma determinada string, utilizando um
+    cálculo baseado na codificação UTF-8.
+
+    Essencial para verificar limites de contexto da API.
 
     Args:
-        text: Description of text.
-
+            text: Description of text.
     """
     return ceil(len(text.encode("utf-8")) / 3)
 
 
 def prompt(content: str, symbols: list[Symbol], language: str = "English") -> str:
-    """Constrói um prompt formatado e detalhado, incluindo instruções específicas (JSON output), símbolos solicitados e o conteúdo fonte, otimizado para ser enviado a modelos de linguagem de IA.
+    """Build the provider prompt.
+
+    Constrói um prompt formatado e detalhado, incluindo instruções específicas (JSON output),
+    símbolos solicitados e o conteúdo fonte, otimizado para ser enviado a modelos de linguagem de
+    IA.
 
     Args:
         content: Description of content.
         symbols: Description of symbols.
         language: Description of language.
-
     """
     names = [{"symbol": item.name, "kind": item.kind, "arguments": item.args} for item in symbols]
     return (
@@ -49,14 +56,15 @@ def prompt(content: str, symbols: list[Symbol], language: str = "English") -> st
 def _post(
     url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int
 ) -> dict[str, Any]:
-    """Função utilitária que realiza requisições HTTP POST para endpoints externos (APIs). É responsável por enviar payloads JSON, gerenciar cabeçalhos e tratar exceções como timeouts ou erros de resposta da API.
+    """Função utilitária que realiza requisições HTTP POST para endpoints externos (APIs).
+
+    Envia payloads JSON, gerencia cabeçalhos e converte falhas de transporte em erros de domínio.
 
     Args:
-        url: Description of url.
-        payload: Description of payload.
-        headers: Description of headers.
-        timeout: Description of timeout.
-
+        url: Endereço do provedor.
+        payload: Corpo JSON da requisição.
+        headers: Cabeçalhos HTTP.
+        timeout: Tempo limite em segundos.
     """
     try:
         with urlopen(
@@ -80,13 +88,14 @@ def _post(
 def documentation_for(
     content: str, symbols: list[Symbol], settings: Settings
 ) -> dict[str, Documentation]:
-    """Função principal que orquestra a geração completa da documentação. Recebe o conteúdo fonte, os símbolos e as configurações do provedor de IA (OpenAI, Gemini, etc.), validando limites de tokens e retornando um dicionário JSON com descrições factuais para cada símbolo.
+    """Função principal que orquestra a geração completa da documentação.
+
+    Valida os limites de tokens e retorna descrições factuais para cada símbolo solicitado.
 
     Args:
-        content: Description of content.
-        symbols: Description of symbols.
-        settings: Description of settings.
-
+        content: Conteúdo-fonte usado como contexto.
+        symbols: Símbolos que devem ser documentados.
+        settings: Configuração do provedor e dos limites.
     """
     body = prompt(content, symbols, settings.language)
     tokens = estimate_tokens(body)
