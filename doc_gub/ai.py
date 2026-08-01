@@ -7,11 +7,14 @@ import os
 from math import ceil
 from typing import Any, cast
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .config import Settings
 from .errors import AIProviderError, AITimeoutError, DocGubError, InvalidAIResponseError
 from .symbols import Documentation, Symbol
+
+_MAX_PROVIDER_RESPONSE_BYTES = 1_000_000
 
 
 def estimate_tokens(text: str) -> int:
@@ -38,12 +41,18 @@ def _post(
     url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int
 ) -> dict[str, Any]:
     """Post JSON and convert transport or decoding failures to domain errors."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise AIProviderError("The AI provider endpoint must be an absolute HTTP(S) URL.")
     try:
         with urlopen(
             Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST"),
             timeout=timeout,
         ) as response:  # nosec B310 - user-configured endpoint
-            decoded = json.loads(response.read())
+            body = response.read(_MAX_PROVIDER_RESPONSE_BYTES + 1)
+            if len(body) > _MAX_PROVIDER_RESPONSE_BYTES:
+                raise AIProviderError("The AI provider response exceeds the supported size.")
+            decoded = json.loads(body)
             if not isinstance(decoded, dict):
                 raise TypeError("The AI provider response must be a JSON object.")
             return cast(dict[str, Any], decoded)
@@ -162,21 +171,36 @@ def _documentation_response(answer: str, symbols: list[Symbol]) -> dict[str, Doc
 def _normalize_documentation(name: str, value: Any, symbol: Symbol) -> Documentation:
     """Validate one symbol's generated description and argument mapping."""
     if isinstance(value, str):
-        return Documentation(value)
+        legacy_description = value.strip()
+        if not legacy_description:
+            raise InvalidAIResponseError("Each symbol must contain a non-empty description.")
+        return Documentation(legacy_description)
     if not isinstance(value, dict):
         raise InvalidAIResponseError("Each symbol must contain documentation details.")
-    description = value.get("description")
+    structured_description = value.get("description")
     arguments = value.get("arguments", {})
     valid_arguments = isinstance(arguments, dict) and all(
-        isinstance(argument, str) and isinstance(argument_description, str)
+        isinstance(argument, str)
+        and isinstance(argument_description, str)
+        and bool(argument_description.strip())
         for argument, argument_description in arguments.items()
     )
-    if not isinstance(description, str) or not valid_arguments:
+    if (
+        not isinstance(structured_description, str)
+        or not structured_description.strip()
+        or not valid_arguments
+    ):
         raise InvalidAIResponseError(
-            "Each symbol must contain a string description and string argument descriptions."
+            "Each symbol must contain a non-empty description and argument descriptions."
         )
     if set(arguments) != set(symbol.args):
         raise InvalidAIResponseError(
             f"Documentation for `{name}` must describe every requested argument."
         )
-    return Documentation(description, arguments)
+    return Documentation(
+        structured_description.strip(),
+        {
+            argument: argument_description.strip()
+            for argument, argument_description in arguments.items()
+        },
+    )
