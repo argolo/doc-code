@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -9,16 +10,10 @@ from .errors import DocGubError
 
 
 class GitRepo:
-    """Classe que representa um repositório Git e fornece métodos para interagir com ele."""
+    """Provide safe Git operations rooted in one worktree."""
 
     def __init__(self, start: Path | None = None) -> None:
-        """Inicializa a instância do GitRepo.
-
-        Localiza a raiz do repositório a partir do diretório informado.
-
-        Args:
-            start: Diretório inicial ou o diretório de trabalho atual.
-        """
+        """Find the worktree root from ``start`` or the current directory."""
         result = self._run("rev-parse", "--show-toplevel", cwd=str(start or Path.cwd()))
         self.root = Path(result.stdout.strip()).resolve()
 
@@ -26,14 +21,16 @@ class GitRepo:
     def _run(
         *args: str, cwd: str | None = None, check: bool = True
     ) -> subprocess.CompletedProcess[str]:
-        """Executa um comando Git usando subprocess.run.
-
-        Este método estático pode ser usado para executar comandos Git fora do contexto de uma
-        instância específica de GitRepo.
-        """
-        result = subprocess.run(
-            ["git", *args], cwd=cwd, text=True, capture_output=True, check=False
-        )
+        """Execute Git and convert expected process failures to domain errors."""
+        executable = shutil.which("git")
+        if not executable:
+            raise DocGubError("Git is required but was not found on PATH.")
+        try:
+            result = subprocess.run(
+                [executable, *args], cwd=cwd, text=True, capture_output=True, check=False
+            )
+        except OSError as exc:
+            raise DocGubError(f"Unable to run Git: {exc}") from exc
         if check and result.returncode:
             raise DocGubError(
                 f"Git command failed: {result.stderr.strip() or result.stdout.strip()}"
@@ -41,20 +38,11 @@ class GitRepo:
         return result
 
     def run(self, *args: str) -> subprocess.CompletedProcess[str]:
-        """Executa um comando Git dentro do diretório raiz do repositório atual."""
+        """Execute Git inside this worktree."""
         return self._run(*args, cwd=str(self.root))
 
     def relative_path(self, requested: Path) -> str:
-        """Return a worktree-relative path.
-
-        Retorna o caminho relativo de um arquivo ou diretório solicitado em relação à raiz do
-        repositório Git.
-
-        Levanta uma exceção se o caminho não existir dentro da árvore de trabalho do Git.
-
-        Args:
-                    requested: Description of requested.
-        """
+        """Return a resolved worktree-relative path or reject the request."""
         try:
             return requested.resolve(strict=True).relative_to(self.root).as_posix()
         except (OSError, ValueError) as exc:
