@@ -44,3 +44,22 @@ jobs:
           .venv/bin/doc-gub --help
       - if: matrix.python-version == '3.11'
         run: uv run python -m pip_audit --local --skip-editable
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked --all-extras --python 3.11
+      - run: uv run ruff check .
+      - run: uv run mypy doc_gub tests
+      - run: uv run pytest --cov=doc_gub --cov-report=term-missing
+      - run: uv run doc-gub --help
