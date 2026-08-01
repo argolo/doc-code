@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from doc_gub import cli
-from doc_gub.cli import _loading, _model_for_attempt, _undocumented_symbols
-from doc_gub.config import Settings
-from doc_gub.errors import AIProviderError, AITimeoutError, DocGubError
-from doc_gub.symbols import Documentation, Symbol, discover, source_for_symbol
+from doc_code import cli
+from doc_code.cli import _loading, _model_for_attempt, _undocumented_symbols
+from doc_code.config import Settings
+from doc_code.errors import AIProviderError, AITimeoutError, DocGubError
+from doc_code.symbols import Documentation, Symbol, discover, source_for_symbol
 
 
 def test_loading_reports_progress_when_stderr_is_not_a_terminal(
@@ -601,6 +601,18 @@ def test_config_init_reports_parent_directory_errors(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert f"Error: unable to create {target}" in result.output
+
+
+def test_config_init_uses_the_doc_code_default_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify config init creates the configuration file for the renamed project."""
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(cli.config_app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / ".doc-code.toml").is_file()
 
 
 def test_generation_reports_source_read_errors(
