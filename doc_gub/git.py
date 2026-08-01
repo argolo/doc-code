@@ -12,11 +12,12 @@ class GitRepo:
     """Classe que representa um repositório Git e fornece métodos para interagir com ele."""
 
     def __init__(self, start: Path | None = None) -> None:
-        """Inicializa a instância do GitRepo. O parâmetro 'start' é opcional e especifica o diretório de início para encontrar a raiz do repositório Git.
+        """Inicializa a instância do GitRepo.
+
+        Localiza a raiz do repositório a partir do diretório informado.
 
         Args:
-            start: Description of start.
-
+            start: Diretório inicial ou o diretório de trabalho atual.
         """
         result = self._run("rev-parse", "--show-toplevel", cwd=str(start or Path.cwd()))
         self.root = Path(result.stdout.strip()).resolve()
@@ -25,7 +26,11 @@ class GitRepo:
     def _run(
         *args: str, cwd: str | None = None, check: bool = True
     ) -> subprocess.CompletedProcess[str]:
-        """Executa um comando Git usando subprocess.run. Este método estático pode ser usado para executar comandos Git fora do contexto de uma instância específica de GitRepo."""
+        """Executa um comando Git usando subprocess.run.
+
+        Este método estático pode ser usado para executar comandos Git fora do contexto de uma
+        instância específica de GitRepo.
+        """
         result = subprocess.run(
             ["git", *args], cwd=cwd, text=True, capture_output=True, check=False
         )
@@ -40,11 +45,15 @@ class GitRepo:
         return self._run(*args, cwd=str(self.root))
 
     def relative_path(self, requested: Path) -> str:
-        """Retorna o caminho relativo de um arquivo ou diretório solicitado em relação à raiz do repositório Git. Levanta uma exceção se o caminho não existir dentro da árvore de trabalho do Git.
+        """Return a worktree-relative path.
+
+        Retorna o caminho relativo de um arquivo ou diretório solicitado em relação à raiz do
+        repositório Git.
+
+        Levanta uma exceção se o caminho não existir dentro da árvore de trabalho do Git.
 
         Args:
-            requested: Description of requested.
-
+                    requested: Description of requested.
         """
         try:
             return requested.resolve(strict=True).relative_to(self.root).as_posix()
