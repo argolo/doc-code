@@ -1,39 +1,37 @@
 SHELL := /bin/sh
 
-VENV ?= .venv
-PYTHON := $(VENV)/bin/python
-PIP := $(VENV)/bin/pip
+UV ?= uv
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv shell install clean clear build test coverage lint format typecheck audit check
+.PHONY: help venv shell install clean clear build test coverage lint format typecheck audit check all
 
 help:
 	@echo "Available targets:"
-	@echo "  make venv       Create the local virtual environment"
+	@echo "  make venv       Create the local virtual environment with uv"
 	@echo "  make shell      Open a new shell with the virtual environment active"
-	@echo "  make install    Install doc-gub and all development dependencies"
+	@echo "  make install    Sync locked development dependencies with uv"
 	@echo "  make clean      Delete only known build and tool-cache artifacts"
 	@echo "  make clear      Backward-compatible alias for make clean"
 	@echo "  make build      Build wheel and source distribution in dist/"
 	@echo "  make test       Run the test suite"
 	@echo "  make coverage   Run tests and display code coverage"
 	@echo "  make lint       Check code with Ruff"
-	@echo "  make format     Format code with Ruff"
+	@echo "  make format     Format code with Ruff (modifies files)"
 	@echo "  make typecheck  Check static types with mypy"
-	@echo "  make audit      Audit Python dependencies with pip-audit"
+	@echo "  make audit      Audit locked Python dependencies with pip-audit"
 	@echo "  make check      Run lint, typecheck, tests, and audit"
+	@echo "  make all        Run checks and build distributions"
 
 venv:
-	@test -x "$(PYTHON)" || python3 -m venv "$(VENV)"
+	$(UV) venv
 
 shell: venv
-	@echo "Opening a new shell with $(VENV) active. Exit it with 'exit'."
-	@. "$(VENV)/bin/activate" && exec "$${SHELL:-/bin/sh}" -i
+	@echo "Opening a new shell with .venv active. Exit it with 'exit'."
+	@. .venv/bin/activate && exec "$${SHELL:-/bin/sh}" -i
 
-install: venv
-	$(PIP) install --upgrade pip
-	$(PIP) install -e ".[dev]"
+install:
+	$(UV) sync --locked --all-extras
 
 clean:
 	rm -rf -- build dist doc_gub.egg-info .pytest_cache .ruff_cache .mypy_cache
@@ -42,27 +40,27 @@ clean:
 clear: clean
 
 build: install
-	$(PYTHON) -m build
+	$(UV) run python -m build
 
 test: install
-	$(PYTHON) -m pytest
+	$(UV) run pytest
 
 coverage: install
-	$(PYTHON) -m pytest --cov=doc_gub --cov-report=term-missing
+	$(UV) run pytest --cov=doc_gub --cov-report=term-missing
 
 lint: install
-	$(PYTHON) -m ruff check .
+	$(UV) run ruff check .
 
 format: install
-	$(PYTHON) -m ruff check --fix .
-	$(PYTHON) -m ruff format .
+	$(UV) run ruff check --fix .
+	$(UV) run ruff format .
 
 typecheck: install
-	$(PYTHON) -m mypy doc_gub tests
+	$(UV) run mypy doc_gub tests
 
 audit: install
-	$(PYTHON) -m pip_audit
+	$(UV) run python -m pip_audit --local --skip-editable
 
 check: lint typecheck test audit
 
-all: venv install build test format lint typecheck test audit format coverage
+all: check build
