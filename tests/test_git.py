@@ -46,9 +46,10 @@ def test_git_repo_combines_staged_unstaged_and_untracked_changes(
     calls: list[tuple[str, ...]] = []
 
     def fake_run(
-        *args: str, cwd: str | None = None, check: bool = True
+        *args: str, cwd: str | None = None, check: bool = True, input_text: str | None = None
     ) -> subprocess.CompletedProcess[str]:
         """Fake run."""
+        del cwd, check, input_text
         calls.append(args)
         stdout = f"{tmp_path}\n" if args[0] == "rev-parse" else ""
         if args == ("diff", "--cached", "--name-only", "-z"):
@@ -80,3 +81,28 @@ def test_git_repo_rejects_paths_outside_the_worktree(tmp_path: Path) -> None:
 
     with pytest.raises(DocGubError, match="inside the Git worktree"):
         repo.relative_path(outside)
+
+
+def test_git_repo_returns_paths_ignored_by_git_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify ignored path detection delegates to Git with NUL-safe input."""
+    calls: list[tuple[tuple[str, ...], str | None]] = []
+
+    def fake_run(
+        *args: str,
+        cwd: str | None = None,
+        check: bool = True,
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Return one ignored path from a fake Git command."""
+        del cwd, check
+        calls.append((args, input_text))
+        stdout = f"{tmp_path}\n" if args[0] == "rev-parse" else "generated.py\0"
+        return subprocess.CompletedProcess(["git", *args], 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(GitRepo, "_run", staticmethod(fake_run))
+    repo = GitRepo(tmp_path)
+
+    assert repo.ignored_paths(["generated.py", "source.py"]) == {"generated.py"}
+    assert calls[-1] == (("check-ignore", "-z", "--stdin"), "generated.py\0source.py\0")
