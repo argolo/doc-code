@@ -275,7 +275,7 @@ wheels = [
 ]
 
 [[package]]
-name = "doc-gub"
+name = "doc-code"
 source = { editable = "." }
 dependencies = [
     { name = "tree-sitter" },
