@@ -39,10 +39,10 @@ def test_git_command_failure_is_reported_as_a_domain_error(
         GitRepo._run("status")
 
 
-def test_git_repo_uses_staged_files_before_unstaged_changes(
+def test_git_repo_combines_staged_unstaged_and_untracked_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify git repo uses staged files before unstaged changes."""
+    """Verify Git change selection does not omit unstaged files after staging."""
     calls: list[tuple[str, ...]] = []
 
     def fake_run(
@@ -50,18 +50,23 @@ def test_git_repo_uses_staged_files_before_unstaged_changes(
     ) -> subprocess.CompletedProcess[str]:
         """Fake run."""
         calls.append(args)
-        stdout = f"{tmp_path}\n" if args[0] == "rev-parse" else "staged.py\0"
+        stdout = f"{tmp_path}\n" if args[0] == "rev-parse" else ""
+        if args == ("diff", "--cached", "--name-only", "-z"):
+            stdout = "staged.py\0shared.py\0"
+        if args == ("diff", "--name-only", "-z"):
+            stdout = "unstaged.py\0shared.py\0"
         if args[0] == "ls-files":
-            stdout = "staged.py\0untracked.py\0"
+            stdout = "untracked.py\0shared.py\0"
         return subprocess.CompletedProcess(["git", *args], 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(GitRepo, "_run", staticmethod(fake_run))
     repo = GitRepo(tmp_path)
 
-    assert repo.changed_files() == ["staged.py", "untracked.py"]
+    assert repo.changed_files() == ["staged.py", "shared.py", "unstaged.py", "untracked.py"]
     assert calls == [
         ("rev-parse", "--show-toplevel"),
         ("diff", "--cached", "--name-only", "-z"),
+        ("diff", "--name-only", "-z"),
         ("ls-files", "--others", "--exclude-standard", "-z"),
     ]
 
