@@ -160,14 +160,30 @@ def doc_gub(
         files = resolve(repo, paths, settings)
         if check:
             missing: dict[str, list[str]] = {}
+            inspection_failures: list[str] = []
             for relative in files:
-                content = (repo.root / relative).read_text(encoding="utf-8")
-                undocumented = _undocumented_symbols(content, Path(relative).suffix, relative)
+                try:
+                    content = (repo.root / relative).read_text(encoding="utf-8")
+                    undocumented = _undocumented_symbols(content, Path(relative).suffix, relative)
+                except (UnicodeDecodeError, SyntaxError) as exc:
+                    inspection_failures.append(relative)
+                    reason = (
+                        _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
+                    )
+                    _show_skipped(relative, reason)
+                    continue
                 if undocumented:
                     missing[relative] = undocumented
-            _show_check(missing)
-            if missing:
+            if missing or inspection_failures:
+                if missing:
+                    _show_check(missing)
+                if inspection_failures:
+                    typer.secho(
+                        f"Documentation check could not inspect {len(inspection_failures)} file(s).",
+                        fg=typer.colors.RED,
+                    )
                 raise typer.Exit(1)
+            _show_check({})
             return
         if settings.output == "apply" and settings.confirm and not yes:
             if not sys.stdin.isatty():
@@ -184,8 +200,14 @@ def doc_gub(
         skipped: list[str] = []
         for relative in files:
             file_path = repo.root / relative
-            content = file_path.read_text(encoding="utf-8")
-            symbols = discover(content, file_path.suffix, relative)
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                symbols = discover(content, file_path.suffix, relative)
+            except (UnicodeDecodeError, SyntaxError) as exc:
+                skipped.append(relative)
+                reason = _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
+                _show_skipped(relative, reason)
+                continue
             targets = [
                 symbol
                 for symbol in symbols
