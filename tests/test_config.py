@@ -3,23 +3,31 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.error import URLError
 
 import pytest
 
 from doc_gub import ai
 from doc_gub.ai import _documentation_response, documentation_for, prompt
 from doc_gub.config import Settings, load
-from doc_gub.errors import AIProviderError, DocGubError, InvalidAIResponseError
+from doc_gub.errors import (
+    AIProviderError,
+    AITimeoutError,
+    DocGubError,
+    InvalidAIResponseError,
+)
 from doc_gub.symbols import discover
 
 
 def test_config_precedence_and_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Testa a precedência e validação da configuração do projeto (ex: cobertura), verificando se as variáveis de ambiente ou argumentos passados superam os valores configurados no arquivo TOML.
+    """Test config precedence and validation.
+
+    Testa a precedência e validação da configuração do projeto (ex: cobertura), verificando se as
+    variáveis de ambiente ou argumentos passados superam os valores configurados no arquivo TOML.
 
     Args:
         tmp_path: Description of tmp_path.
         monkeypatch: Description of monkeypatch.
-
     """
     (tmp_path / ".doc-gub.toml").write_text("[documentation]\ncoverage = 'all'\n", encoding="utf-8")
     monkeypatch.setenv("DOC_GUB_COVERAGE", "minimal")
@@ -67,11 +75,13 @@ def test_model_and_endpoint_are_validated(
 
 
 def test_language_is_loaded_and_included_in_the_ai_prompt(tmp_path: Path) -> None:
-    """Verifica que o idioma definido na configuração é corretamente carregado e incluído no prompt enviado para a API de IA.
+    """Test language is loaded and included in the ai prompt.
+
+    Verifica que o idioma definido na configuração é corretamente carregado e incluído no prompt
+    enviado para a API de IA.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     (tmp_path / ".doc-gub.toml").write_text(
         "[documentation]\nlanguage = 'Portuguese'\n", encoding="utf-8"
@@ -88,7 +98,6 @@ def test_request_scope_can_be_configured(tmp_path: Path) -> None:
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     (tmp_path / ".doc-gub.toml").write_text(
         "[documentation]\nrequest_scope = 'symbol'\n", encoding="utf-8"
@@ -100,9 +109,7 @@ def test_request_scope_can_be_configured(tmp_path: Path) -> None:
 def test_structured_ai_response_requires_argument_documentation() -> None:
     """Testa argumentos em uma resposta estruturada.
 
-    A resposta deve incluir argumentos para cada argumento solicitado
-    da função.
-
+    A resposta deve incluir argumentos para cada argumento solicitado da função.
     """
     symbols = discover("def calculate(value):\n    return value\n", ".py")
     function = next(symbol for symbol in symbols if symbol.name == "calculate")
@@ -193,7 +200,6 @@ def test_documentation_for_normalizes_supported_provider_responses(
             payload: Os dados a serem enviados no corpo (body) da requisição.
             _headers: Um dicionário contendo os cabeçalhos HTTP personalizados para a requisição.
             _timeout: O tempo limite em segundos para a requisição.
-
         """
         received.append(payload)
         return response
@@ -228,9 +234,8 @@ def test_post_converts_invalid_transport_response_to_domain_error(
         def __exit__(self, *_args: object) -> None:
             """Finaliza o contexto da resposta.
 
-            É chamado quando o bloco ``with`` é encerrado para limpar
-            recursos ou executar lógica de finalização.
-
+            É chamado quando o bloco ``with`` é encerrado para limpar recursos ou executar lógica de
+            finalização.
             """
             return None
 
@@ -241,4 +246,35 @@ def test_post_converts_invalid_transport_response_to_domain_error(
     monkeypatch.setattr(ai, "urlopen", lambda *_args, **_kwargs: Response())
 
     with pytest.raises(AIProviderError, match="invalid response"):
+        ai._post("https://example.test", {}, {}, 1)
+
+
+@pytest.mark.parametrize(
+    ("transport_error", "expected_error"),
+    [
+        (TimeoutError("request timed out"), AITimeoutError),
+        (URLError(TimeoutError("socket timed out")), AITimeoutError),
+        (URLError("network unavailable"), AIProviderError),
+    ],
+)
+def test_post_converts_transport_failures_to_domain_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    transport_error: OSError,
+    expected_error: type[AIProviderError],
+) -> None:
+    """Classify provider transport failures without leaking standard-library errors."""
+
+    def fail_request(*_args: object, **_kwargs: object) -> None:
+        """Levanta um erro de transporte para simular uma falha na requisição.
+
+        Args:
+            _args: Argumentos posicionais (não utilizados).
+            _kwargs: Argumentos de palavra-chave (não utilizados).
+
+        """
+        raise transport_error
+
+    monkeypatch.setattr(ai, "urlopen", fail_request)
+
+    with pytest.raises(expected_error, match="Unable to contact the AI provider"):
         ai._post("https://example.test", {}, {}, 1)
