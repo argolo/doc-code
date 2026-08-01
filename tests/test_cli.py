@@ -353,6 +353,129 @@ def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
     assert "Skipped documentation: sample.py" in result.output
 
 
+def test_symbol_scope_applies_every_duplicate_symbol_incrementally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify duplicate names remain addressable after earlier insertions shift their lines."""
+    source = (
+        '\"\"\"Module docs.\"\"\"\n\n'
+        "def repeated():\n"
+        "    return 1\n\n"
+        "def repeated():\n"
+        "    return 2\n"
+    )
+    path = tmp_path / "duplicate.py"
+    path.write_text(source, encoding="utf-8")
+
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    settings = Settings(output="apply", confirm=False, request_scope="symbol", models=("test",))
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["duplicate.py"])
+    monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
+    monkeypatch.setattr(
+        cli,
+        "documentation_for",
+        lambda _source, symbols, _settings: {
+            symbols[0].name: Documentation(f"Document {symbols[0].name}.")
+        },
+    )
+
+    result = CliRunner().invoke(cli.app, ["duplicate.py"])
+
+    assert result.exit_code == 0, result.output
+    updated = path.read_text(encoding="utf-8")
+    assert '"""Document repeated@L3:1."""' in updated
+    assert '"""Document repeated@L6:1."""' in updated
+
+
+def test_inline_python_suites_do_not_request_ai_documentation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify inline Python suites are excluded before documentation generation."""
+    path = tmp_path / "inline.py"
+    source = '\"\"\"Inline examples.\"\"\"\n\n\ndef compact(): return 1\n'
+    path.write_text(source, encoding="utf-8")
+
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    calls: list[str] = []
+    settings = Settings(confirm=False, request_scope="symbol", models=("test",))
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["inline.py"])
+
+    def unexpected_documentation(*_args: object) -> dict[str, Documentation]:
+        """Fail the test if an inline suite reaches the provider."""
+        calls.append("called")
+        return {}
+
+    monkeypatch.setattr(
+        cli,
+        "documentation_for",
+        unexpected_documentation,
+    )
+
+    result = CliRunner().invoke(cli.app, ["inline.py"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    assert path.read_text(encoding="utf-8") == source
+
+
+def test_missing_javascript_runtime_skips_before_requesting_ai(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify JavaScript validation prerequisites are checked before provider usage."""
+    path = tmp_path / "sample.js"
+    path.write_text("function work() { return true; }\n", encoding="utf-8")
+
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    calls: list[str] = []
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: Settings(models=("test",)))
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["sample.js"])
+    monkeypatch.setattr(
+        cli,
+        "validation_command",
+        lambda *_args: (_ for _ in ()).throw(DocGubError("node is unavailable")),
+    )
+
+    def unexpected_documentation(*_args: object) -> dict[str, Documentation]:
+        """Fail the test if a missing runtime reaches the provider."""
+        calls.append("called")
+        return {}
+
+    monkeypatch.setattr(
+        cli,
+        "documentation_for",
+        unexpected_documentation,
+    )
+
+    result = CliRunner().invoke(cli.app, ["sample.js"])
+
+    assert result.exit_code == 1, result.output
+    assert calls == []
+    assert "node is unavailable" in result.output
+
+
 def test_symbol_scope_applies_class_docs_before_a_decorated_method(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
