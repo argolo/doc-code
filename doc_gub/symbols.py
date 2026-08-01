@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import ast
-import re
 import textwrap
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+
+from tree_sitter import Language, Node, Parser
+from tree_sitter_javascript import language as javascript_language
+from tree_sitter_typescript import language_tsx, language_typescript
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,18 @@ def _docstring_expression(node: ast.stmt | None) -> ast.Expr | None:
     return None
 
 
+def _python_arguments(arguments: ast.arguments) -> tuple[str, ...]:
+    """Return every named function parameter except conventional instance parameters."""
+    positional = (*arguments.posonlyargs, *arguments.args)
+    named = [argument.arg for argument in positional if argument.arg not in {"self", "cls"}]
+    if arguments.vararg:
+        named.append(arguments.vararg.arg)
+    named.extend(argument.arg for argument in arguments.kwonlyargs)
+    if arguments.kwarg:
+        named.append(arguments.kwarg.arg)
+    return tuple(named)
+
+
 def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
     """Analisa uma string de conteúdo Python e retorna uma lista de objetos Symbol que representam os símbolos definidos.
 
@@ -95,8 +110,8 @@ def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
             first = node.body[0] if node.body else None
             docstring = _docstring_expression(first)
             args = (
-                tuple(arg.arg for arg in node.args.args if arg.arg not in {"self", "cls"})
-                if hasattr(node, "args")
+                _python_arguments(node.args)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                 else ()
             )
             found.append(
@@ -121,56 +136,136 @@ def python_symbols(content: str, filename: str = "<unknown>") -> list[Symbol]:
     return found
 
 
-_JS = re.compile(
-    r"^(?P<indent>\s*)(?:export\s+)?(?:(?:async\s+)?function\s+(?P<function>[$\w]+)|class\s+(?P<class>[$\w]+)|(?:(?:const|let|var)\s+)?(?P<arrow>[$\w]+)\s*=\s*(?:async\s*)?\((?P<args>[^)]*)\)\s*=>|(?P<method>[$\w]+)\s*\((?P<methodargs>[^)]*)\s*\{)"
-)
+_JAVASCRIPT = Language(javascript_language())
+_TYPESCRIPT = Language(language_typescript())
+_TSX = Language(language_tsx())
 
 
-def javascript_symbols(content: str) -> list[Symbol]:
-    """Analisa uma string de conteúdo JavaScript usando expressões regulares para extrair funções, classes e métodos JS.
+def _node_text(node: Node | None, source: bytes) -> str:
+    """Return the UTF-8 source slice represented by an AST node."""
+    return source[node.start_byte : node.end_byte].decode() if node else ""
 
-    Args:
-        content: Description of content.
 
-    """
+def _parameter_names(node: Node | None, source: bytes) -> tuple[str, ...]:
+    """Extract named parameter bindings from a JavaScript or TypeScript AST node."""
+    if node is None:
+        return ()
+    if node.type in {"identifier", "shorthand_property_identifier_pattern"}:
+        return (_node_text(node, source),)
+    if node.type == "assignment_pattern":
+        return _parameter_names(node.child_by_field_name("left"), source)
+    if node.type in {"required_parameter", "optional_parameter"}:
+        return _parameter_names(node.child_by_field_name("pattern"), source)
+    if node.type == "rest_pattern":
+        return tuple(name for child in node.children for name in _parameter_names(child, source))
+    return tuple(name for child in node.named_children for name in _parameter_names(child, source))
+
+
+def _javascript_symbol(
+    node: Node, name: str, kind: str, parameters: Node | None, source: bytes, lines: list[str]
+) -> Symbol:
+    """Build a symbol from a declaration AST node and its optional JSDoc block."""
+    line = node.start_point.row + 1
+    doc_start: int | None = None
+    doc_end: int | None = None
+    if line > 1 and lines[line - 2].strip().endswith("*/"):
+        for index in range(line - 2, -1, -1):
+            if lines[index].strip().startswith("/**"):
+                doc_start, doc_end = index + 1, line - 1
+                break
+    source_line = lines[line - 1]
+    indent = source_line[: len(source_line) - len(source_line.lstrip())]
+    return Symbol(
+        name,
+        kind,
+        line,
+        node.end_point.row + 1,
+        indent,
+        _parameter_names(parameters, source),
+        doc_start is not None,
+        doc_start,
+        doc_end,
+    )
+
+
+def javascript_symbols(content: str, suffix: str = ".js") -> list[Symbol]:
+    """Discover JavaScript and TypeScript declarations through their concrete syntax tree."""
+    source = content.encode()
+    language = _TSX if suffix == ".tsx" else _TYPESCRIPT if suffix == ".ts" else _JAVASCRIPT
+    tree = Parser(language).parse(source)
     lines = content.splitlines()
     found: list[Symbol] = []
-    for index, line in enumerate(lines):
-        match = _JS.match(line)
-        if not match:
-            continue
-        name = (
-            match.group("function")
-            or match.group("class")
-            or match.group("arrow")
-            or match.group("method")
-        )
-        kind = "class" if match.group("class") else "function"
-        args = match.group("args") or match.group("methodargs") or ""
-        arguments = tuple(
-            item.strip().split("=")[0].strip() for item in args.split(",") if item.strip()
-        )
-        doc_start: int | None = None
-        doc_end: int | None = None
-        if index and lines[index - 1].strip().endswith("*/"):
-            for doc_index in range(index - 1, -1, -1):
-                if lines[doc_index].strip().startswith("/**"):
-                    doc_start = doc_index + 1
-                    doc_end = index
-                    break
-        found.append(
-            Symbol(
-                name,
-                kind,
-                index + 1,
-                index + 1,
-                match.group("indent"),
-                arguments,
-                doc_start is not None,
-                doc_start,
-                doc_end,
+
+    def visit(node: Node, prefix: str = "") -> None:
+        """Visita um nó (node) e registra símbolos JavaScript encontrados nele, anexando o nome do
+        prefixo fornecido.
+
+        Args:
+            node: O nó AST a ser visitado.
+            prefix: O prefixo de escopo para os nomes dos símbolos encontrados.
+
+        """
+        declaration = node
+        if node.type == "export_statement":
+            declaration = node.child_by_field_name("declaration") or node
+        if declaration.type == "class_declaration":
+            raw_name = _node_text(declaration.child_by_field_name("name"), source)
+            name = f"{prefix}.{raw_name}" if prefix else raw_name
+            found.append(_javascript_symbol(declaration, name, "class", None, source, lines))
+            body = declaration.child_by_field_name("body")
+            if body:
+                for child in body.named_children:
+                    if child.type == "method_definition":
+                        method_name = _node_text(child.child_by_field_name("name"), source)
+                        found.append(
+                            _javascript_symbol(
+                                child,
+                                f"{name}.{method_name}",
+                                "function",
+                                child.child_by_field_name("parameters"),
+                                source,
+                                lines,
+                            )
+                        )
+            return
+        if declaration.type in {"function_declaration", "generator_function_declaration"}:
+            raw_name = _node_text(declaration.child_by_field_name("name"), source)
+            found.append(
+                _javascript_symbol(
+                    declaration,
+                    f"{prefix}.{raw_name}" if prefix else raw_name,
+                    "function",
+                    declaration.child_by_field_name("parameters"),
+                    source,
+                    lines,
+                )
             )
-        )
+            return
+        if declaration.type == "lexical_declaration":
+            for declarator in declaration.named_children:
+                value = declarator.child_by_field_name("value")
+                if (
+                    declarator.type == "variable_declarator"
+                    and value
+                    and value.type == "arrow_function"
+                ):
+                    name = _node_text(declarator.child_by_field_name("name"), source)
+                    found.append(
+                        _javascript_symbol(
+                            declarator,
+                            name,
+                            "function",
+                            value.child_by_field_name("parameters")
+                            or value.child_by_field_name("parameter"),
+                            source,
+                            lines,
+                        )
+                    )
+            return
+        for child in node.named_children:
+            visit(child, prefix)
+
+    visit(tree.root_node)
     return found
 
 
@@ -183,7 +278,11 @@ def discover(content: str, suffix: str, filename: str = "<unknown>") -> list[Sym
         filename: Name reported when Python parsing fails.
 
     """
-    return python_symbols(content, filename) if suffix == ".py" else javascript_symbols(content)
+    return (
+        python_symbols(content, filename)
+        if suffix == ".py"
+        else javascript_symbols(content, suffix)
+    )
 
 
 def eligible(symbol: Symbol, coverage: str) -> bool:
@@ -225,22 +324,14 @@ def source_for_symbol(
             start -= 1
         return "".join(lines[start : symbol.end_line])
 
-    depth = 0
-    opened = False
-    for index in range(start, len(lines)):
-        line = lines[index]
-        depth += line.count("{") - line.count("}")
-        opened = opened or "{" in line
-        if (opened and depth <= 0) or (not opened and ";" in line):
-            return "".join(lines[start : index + 1])
-    return "".join(lines[start:])
+    return "".join(lines[start : symbol.end_line])
 
 
 def _module_outline(content: str, suffix: str, filename: str = "<unknown>") -> str:
     """Create a compact module overview without including implementation bodies."""
     if suffix == ".py":
         return _python_module_outline(content, filename)
-    return _javascript_module_outline(content)
+    return _javascript_module_outline(content, suffix)
 
 
 def _python_module_outline(content: str, filename: str = "<unknown>") -> str:
@@ -292,7 +383,7 @@ def _python_definition_header(
     return "".join(lines[start:end]).rstrip()
 
 
-def _javascript_module_outline(content: str) -> str:
+def _javascript_module_outline(content: str, suffix: str = ".js") -> str:
     """Return imports and definition lines for JavaScript and TypeScript modules."""
     lines = content.splitlines(keepends=True)
     outline = ["MODULE OUTLINE:"]
@@ -306,7 +397,7 @@ def _javascript_module_outline(content: str) -> str:
                 statement.append(lines[index])
             outline.append("".join(statement).rstrip())
         index += 1
-    for symbol in javascript_symbols(content):
+    for symbol in javascript_symbols(content, suffix):
         if not symbol.name.startswith("_"):
             outline.append(lines[symbol.line - 1].rstrip())
     return "\n\n".join(part for part in outline if part)
