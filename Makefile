@@ -6,14 +6,15 @@ PIP := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv shell install clear build test coverage lint format typecheck audit check
+.PHONY: help venv shell install clean clear build test coverage lint format typecheck audit check
 
 help:
 	@echo "Available targets:"
 	@echo "  make venv       Create the local virtual environment"
 	@echo "  make shell      Open a new shell with the virtual environment active"
 	@echo "  make install    Install doc-gub and all development dependencies"
-	@echo "  make clear      Delete every ignored file (git clean -Xdf)"
+	@echo "  make clean      Delete only known build and tool-cache artifacts"
+	@echo "  make clear      Backward-compatible alias for make clean"
 	@echo "  make build      Build wheel and source distribution in dist/"
 	@echo "  make test       Run the test suite"
 	@echo "  make coverage   Run tests and display code coverage"
@@ -34,9 +35,11 @@ install: venv
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
 
-clear:
-	@echo "Deleting files ignored by Git, including virtual environments and local .env files."
-	git clean -Xdf
+clean:
+	rm -rf -- build dist doc_gub.egg-info .pytest_cache .ruff_cache .mypy_cache
+	rm -f -- .coverage
+
+clear: clean
 
 build: install
 	$(PYTHON) -m build
@@ -62,4 +65,4 @@ audit: install
 
 check: lint typecheck test audit
 
-all: clear venv install build test format lint typecheck test audit format coverage
+all: venv install build test format lint typecheck test audit format coverage
