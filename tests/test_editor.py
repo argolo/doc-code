@@ -1,13 +1,12 @@
-"""Test editor behavior.
-
-Módulo de testes unitários para verificar o comportamento do sistema de geração e edição de
-documentação 'doc_gub', cobrindo diversos cenários como formatação Python, aninhamento assíncrono, e
-substituição/preservação de JSDoc.
-"""
+"""Test editor behavior."""
 
 from __future__ import annotations
 
 import ast
+import os
+import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,17 +23,7 @@ from doc_gub.symbols import Documentation, discover, source_for_symbol
     [("google", "Args:"), ("numpy", "Parameters"), ("sphinx", ":param value:")],
 )
 def test_python_formats_and_stale_file_protection(tmp_path: Path, fmt: str, marker: str) -> None:
-    """Test python formats and stale file protection.
-
-    Testa o comportamento do sistema ao detectar alterações em arquivos após a fase de preparação
-    (preview), garantindo que a aplicação falhe com um erro específico ('changed after preview') se
-    o conteúdo for modificado concorrentemente.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        fmt: Description of fmt.
-        marker: Description of marker.
-    """
+    """Verify python formats and stale file protection."""
     path = tmp_path / "sample.py"
     source = "def calculate(value):\n    return value * 2\n"
     path.write_text(source, encoding="utf-8")
@@ -59,15 +48,95 @@ def test_python_formats_and_stale_file_protection(tmp_path: Path, fmt: str, mark
         apply(prepared)
 
 
+def test_apply_rejects_a_file_replaced_by_a_symlink(tmp_path: Path) -> None:
+    """Verify apply rejects a file replaced by a symlink."""
+    path = tmp_path / "source.py"
+    external = tmp_path / "external.py"
+    source = "def work():\n    return True\n"
+    path.write_text(source, encoding="utf-8")
+    external.write_text(source, encoding="utf-8")
+    symbols = discover(source, ".py")
+    prepared = prepare(
+        path,
+        symbols,
+        {symbol.name: "Generated documentation." for symbol in symbols},
+        load(tmp_path),
+    )
+    path.unlink()
+    path.symlink_to(external)
+
+    with pytest.raises(DocGubError, match="became a symbolic link"):
+        apply(prepared)
+
+    assert external.read_text(encoding="utf-8") == source
+
+
+def test_apply_preserves_crlf_and_file_permissions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify apply preserves crlf and file permissions."""
+    path = tmp_path / "source.py"
+    source = b"def work():\r\n    return True\r\n"
+    path.write_bytes(source)
+    path.chmod(0o640)
+    content = source.decode("utf-8")
+    symbols = discover(content, ".py")
+    prepared = prepare(
+        path,
+        symbols,
+        {symbol.name: "Generated documentation." for symbol in symbols},
+        load(tmp_path),
+    )
+    replacements: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def tracked_replace(source_path: str | Path, destination: str | Path) -> None:
+        """Tracked replace."""
+        replacements.append((Path(source_path), Path(destination)))
+        real_replace(source_path, destination)
+
+    monkeypatch.setattr(editor.os, "replace", tracked_replace)
+
+    apply(prepared)
+
+    result = path.read_bytes()
+    assert b"\r\n" in result
+    assert b"\n" not in result.replace(b"\r\n", b"")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert replacements and replacements[0][0].parent == path.parent
+
+
+def test_atomic_replace_failures_leave_the_original_source_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify atomic replacement failures become actionable domain errors."""
+    path = tmp_path / "sample.py"
+    source = "def calculate():\n    return 1\n"
+    path.write_text(source, encoding="utf-8")
+    symbols = discover(source, ".py")
+    target = next(item for item in symbols if item.name == "calculate")
+    prepared = prepare(
+        path,
+        symbols,
+        {"calculate": Documentation("Calculate a value.")},
+        load(tmp_path),
+        selected_symbols=[target],
+    )
+
+    def fail_replace(_source: str | Path, _destination: str | Path) -> None:
+        """Simulate a busy destination file."""
+        raise OSError("busy")
+
+    monkeypatch.setattr(editor.os, "replace", fail_replace)
+
+    with pytest.raises(DocGubError, match="unable to apply the atomic file update: busy"):
+        apply(prepared)
+
+    assert path.read_text(encoding="utf-8") == source
+
+
 def test_python_nested_async_and_jsdoc(tmp_path: Path) -> None:
-    """Test python nested async and jsdoc.
-
-    Verifica a descoberta de símbolos em código Python assíncrono aninhado e JavaScript com
-    JSDoc, garantindo que os métodos e módulos sejam corretamente identificados.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify python nested async and jsdoc."""
     python = "class Service:\n    async def fetch(self, item):\n        return item\n"
     symbols = discover(python, ".py")
     assert {item.name for item in symbols} >= {"module", "Service", "Service.fetch"}
@@ -92,7 +161,7 @@ def test_python_nested_async_and_jsdoc(tmp_path: Path) -> None:
 
 
 def test_python_discovery_includes_every_parameter_kind() -> None:
-    """Request documentation for positional-only, variadic, and keyword-only parameters."""
+    """Verify python discovery includes every parameter kind."""
     source = (
         "class Service:\n"
         "    def work(self, first, /, second, *items, option, **extra):\n"
@@ -105,7 +174,7 @@ def test_python_discovery_includes_every_parameter_kind() -> None:
 
 
 def test_javascript_class_methods_are_discovered_with_unique_names() -> None:
-    """Discover class methods and keep same-named methods unambiguous."""
+    """Verify javascript class methods are discovered with unique names."""
     source = (
         "class First {\n"
         "  run(value) { return value; }\n"
@@ -125,7 +194,7 @@ def test_javascript_class_methods_are_discovered_with_unique_names() -> None:
 
 
 def test_javascript_discovery_and_symbol_scope_ignore_braces_in_strings() -> None:
-    """Braces in JavaScript literals do not close a class or function scope."""
+    """Verify javascript discovery and symbol scope ignore braces in strings."""
     source = (
         "class Service {\n"
         '  label = "}";\n'
@@ -155,7 +224,7 @@ def test_javascript_discovery_and_symbol_scope_ignore_braces_in_strings() -> Non
 
 
 def test_typescript_and_tsx_discovery_use_syntax_trees() -> None:
-    """Discover generic methods and destructured JSX arrow-function parameters."""
+    """Verify typescript and tsx discovery use syntax trees."""
     typescript = (
         "export default class Repository<T> {\n"
         "  async save(value: T, ...items: T[]): Promise<T> { return value; }\n"
@@ -172,7 +241,7 @@ def test_typescript_and_tsx_discovery_use_syntax_trees() -> None:
 
 
 def test_javascript_syntax_errors_include_file_and_location() -> None:
-    """Reject malformed JavaScript before documentation generation begins."""
+    """Verify javascript syntax errors include file and location."""
     with pytest.raises(SyntaxError) as raised:
         discover("export function broken( {\n", ".js", "broken.js")
 
@@ -182,7 +251,7 @@ def test_javascript_syntax_errors_include_file_and_location() -> None:
 
 
 def test_typescript_discovers_class_arrow_fields_and_nested_classes() -> None:
-    """Qualify callable fields and nested classes with their containing class."""
+    """Verify typescript discovers class arrow fields and nested classes."""
     source = (
         "class Outer {\n"
         "  callback = (value: string) => value;\n"
@@ -198,21 +267,35 @@ def test_typescript_discovers_class_arrow_fields_and_nested_classes() -> None:
         "Outer",
         "Outer.callback",
         "Outer.method",
-        "Outer.Inner",
-        "Outer.Inner.run",
+        "Outer.method.Inner",
+        "Outer.method.Inner.run",
     ]
     assert next(symbol for symbol in symbols if symbol.name == "Outer.callback").args == ("value",)
 
 
+def test_javascript_nested_and_redefined_symbols_have_unique_names() -> None:
+    """Verify javascript nested and redefined symbols have unique names."""
+    content = (
+        "class Service {\n"
+        "  first() { function helper() {} }\n"
+        "  second() { function helper() {} }\n"
+        "}\n"
+        "function repeated() {}\n"
+        "function repeated() {}\n"
+    )
+
+    symbols = discover(content, ".js")
+    names = [symbol.name for symbol in symbols]
+
+    assert "Service.first.helper" in names
+    assert "Service.second.helper" in names
+    assert "repeated@L5:1" in names
+    assert "repeated@L6:1" in names
+    assert len(names) == len(set(names))
+
+
 def test_python_docstrings_follow_the_nearest_ruff_line_length(tmp_path: Path) -> None:
-    """Verifica o limite de linha definido pelo Ruff.
-
-    As docstrings de funções devem seguir o limite de 52
-    caracteres, mesmo quando há descrições longas.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify python docstrings follow the nearest ruff line length."""
     project = tmp_path / "python-project"
     project.mkdir()
     (project / "pyproject.toml").write_text("[tool.ruff]\nline-length = 52\n", encoding="utf-8")
@@ -238,12 +321,109 @@ def test_python_docstrings_follow_the_nearest_ruff_line_length(tmp_path: Path) -
     ast.parse(prepared.after)
 
 
-def test_javascript_docstrings_follow_the_nearest_eslint_max_len(tmp_path: Path) -> None:
-    """Testa se as docstrings de JavaScript seguem o limite máximo de caracteres do ESLint.
+def test_long_python_summary_passes_the_project_d205_rule(tmp_path: Path) -> None:
+    """Verify long summaries have a blank line before their detailed description."""
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.ruff]\n"
+        "line-length = 100\n"
+        "[tool.ruff.lint]\n"
+        'select = ["D", "E501"]\n'
+        "[tool.ruff.lint.pydocstyle]\n"
+        'convention = "google"\n',
+        encoding="utf-8",
+    )
+    path = tmp_path / "sample.py"
+    source = (
+        '"""Document the sample module."""\n\n'
+        "def fake_documentation(_source, _symbols, settings):\n"
+        "    return {}\n"
+    )
+    path.write_text(source, encoding="utf-8")
+    symbols = discover(source, ".py")
+    target = next(item for item in symbols if item.name == "fake_documentation")
+    prepared = prepare(
+        path,
+        symbols,
+        {
+            target.name: Documentation(
+                "Simula o processo de documentação, adicionando um modelo ao histórico e "
+                "retornando uma estrutura de dicionário com informações sobre os símbolos.",
+                {
+                    "_source": "O conteúdo da fonte a ser processada.",
+                    "_symbols": "Os símbolos encontrados no código.",
+                    "settings": "As configurações operacionais.",
+                },
+            )
+        },
+        load(tmp_path),
+        selected_symbols=[target],
+    )
+    path.write_text(prepared.after, encoding="utf-8")
 
-    Args:
-        tmp_path: Caminho temporário para arquivos e diretórios.
-    """
+    assert (
+        '    """Simula o processo de documentação.\n\n    Adicionando um modelo ao histórico'
+    ) in prepared.after
+    result = subprocess.run(
+        [str(Path(sys.executable).with_name("ruff")), "check", str(path)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_python_docstrings_follow_the_project_pydocstyle_convention(tmp_path: Path) -> None:
+    """Verify the nearest Ruff convention selects the generated parameter section style."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.ruff.lint.pydocstyle]\nconvention = "numpy"\n', encoding="utf-8"
+    )
+    path = tmp_path / "sample.py"
+    source = "def calculate(value):\n    return value\n"
+    path.write_text(source, encoding="utf-8")
+    symbols = discover(source, ".py")
+    target = next(item for item in symbols if item.name == "calculate")
+
+    prepared = prepare(
+        path,
+        symbols,
+        {target.name: Documentation("Calculate a value.", {"value": "Input value."})},
+        load(tmp_path, python_format="google"),
+        selected_symbols=[target],
+    )
+
+    assert "Parameters\n    ----------" in prepared.after
+    assert "Args:" not in prepared.after
+
+
+def test_prepare_reads_rendering_options_once_per_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify prepare reads project rendering options once per file."""
+    path = tmp_path / "source.py"
+    source = "def first():\n    pass\n\ndef second():\n    pass\n"
+    path.write_text(source, encoding="utf-8")
+    calls: list[Path] = []
+
+    def rendering_options(candidate: Path, _settings: object) -> tuple[int, str]:
+        """Record rendering option lookups."""
+        calls.append(candidate)
+        return 88, "google"
+
+    monkeypatch.setattr(editor, "_rendering_options", rendering_options)
+    symbols = discover(source, ".py")
+    prepare(
+        path,
+        symbols,
+        {symbol.name: "Generated documentation." for symbol in symbols},
+        load(tmp_path),
+    )
+
+    assert calls == [path]
+
+
+def test_javascript_docstrings_follow_the_nearest_eslint_max_len(tmp_path: Path) -> None:
+    """Verify javascript docstrings follow the nearest eslint max len."""
     project = tmp_path / "javascript-project"
     project.mkdir()
     (project / "eslint.config.js").write_text(
@@ -270,14 +450,7 @@ def test_javascript_docstrings_follow_the_nearest_eslint_max_len(tmp_path: Path)
 
 
 def test_only_documentation_is_changed_and_existing_jsdoc_can_be_replaced(tmp_path: Path) -> None:
-    """Test only documentation is changed and existing jsdoc can be replaced.
-
-    Testa que a documentação de módulos e funções pode ser atualizada ou substituída, tanto em
-    arquivos Python quanto JavaScript.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify only documentation is changed and existing jsdoc can be replaced."""
     python_path = tmp_path / "safe.py"
     python = (
         "#!/usr/bin/env python3\n# coding: utf-8\ndef calculate(value):\n    return value * 2\n"
@@ -314,28 +487,14 @@ def test_only_documentation_is_changed_and_existing_jsdoc_can_be_replaced(tmp_pa
 def test_typescript_validation_uses_tsc_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test typescript validation uses tsc when available.
-
-    Verifica se a validação de TypeScript utiliza o compilador `tsc` quando ele está disponível
-    no ambiente, simulando o comportamento do sistema operacional e da biblioteca subjacente.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify typescript validation uses tsc when available."""
     captured: list[str] = []
     monkeypatch.setattr(
         editor.shutil, "which", lambda name: "/usr/local/bin/tsc" if name == "tsc" else None
     )
 
     def fake_run(command: list[str], **_: object) -> object:
-        """Simula a execução de um comando e registra os argumentos em 'captured'.
-
-        Retorna um objeto simulado de resultado com código de retorno 0.
-
-        Args:
-                    command: Description of command.
-        """
+        """Fake run."""
         captured.extend(command)
         return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
 
@@ -345,19 +504,33 @@ def test_typescript_validation_uses_tsc_when_available(
     assert captured[:5] == ["/usr/local/bin/tsc", "--noEmit", "--noCheck", "--pretty", "false"]
 
 
+def test_javascript_validation_reports_missing_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify javascript validation reports missing node."""
+    path = tmp_path / "source.js"
+    source = "function work() { return true; }\n"
+    path.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(editor.shutil, "which", lambda _name: None)
+
+    with pytest.raises(DocGubError, match="requires `node` on PATH"):
+        prepare(
+            path,
+            discover(source, ".js"),
+            {"work": "Perform work."},
+            load(tmp_path),
+        )
+
+
 def test_jsx_validation_uses_typescript_compiler(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Validate JSX with a JSX-aware compiler instead of Node's JS-only checker."""
+    """Verify jsx validation uses typescript compiler."""
     captured: list[str] = []
     monkeypatch.setattr(editor.shutil, "which", lambda _: "/usr/local/bin/tsc")
 
     def fake_run(command: list[str], **_kwargs: object) -> object:
-        """Executa um comando simulado e captura os argumentos.
-
-        Args:
-            command: A lista de strings que representa o comando a ser executado.
-        """
+        """Fake run."""
         captured.extend(command)
         return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
 
@@ -374,14 +547,7 @@ def test_jsx_validation_uses_typescript_compiler(
 
 
 def test_inline_python_suites_are_left_untouched(tmp_path: Path) -> None:
-    """Test inline python suites are left untouched.
-
-    Verifica que o conteúdo de um arquivo Python criado temporariamente não é alterado durante o
-    processo de preparação, mesmo quando funções são descobertas e preparadas.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify inline python suites are left untouched."""
     path = tmp_path / "inline.py"
     source = "def ready(): return True\n"
     path.write_text(source, encoding="utf-8")
@@ -395,14 +561,7 @@ def test_inline_python_suites_are_left_untouched(tmp_path: Path) -> None:
 
 
 def test_python_docstring_is_inserted_after_a_multiline_signature(tmp_path: Path) -> None:
-    """Test python docstring is inserted after a multiline signature.
-
-    Verifica se o docstring é corretamente inserido após uma assinatura de função que ocupa
-    múltiplas linhas, simulando um cenário de análise de código Python.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify python docstring is inserted after a multiline signature."""
     path = tmp_path / "test_cli.py"
     source = (
         "def test_loading_reports_progress_when_stderr_is_not_a_terminal(\n"
@@ -427,14 +586,7 @@ def test_python_docstring_is_inserted_after_a_multiline_signature(tmp_path: Path
 
 
 def test_class_docstring_is_inserted_before_decorated_first_method(tmp_path: Path) -> None:
-    """Test class docstring is inserted before decorated first method.
-
-    Verifica se a docstring da classe é inserida antes do primeiro método decorado na saída do
-    código.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify class docstring is inserted before decorated first method."""
     path = tmp_path / "finance.py"
     source = (
         "class FinancialCalculator:\n"
@@ -465,14 +617,7 @@ def test_class_docstring_is_inserted_before_decorated_first_method(tmp_path: Pat
 
 
 def test_generated_python_docstrings_escape_quotes_and_backslashes(tmp_path: Path) -> None:
-    """Test generated python docstrings escape quotes and backslashes.
-
-    Verifica se o docstring gerado é corretamente escapado, lidando com aspas e barras
-    invertidas.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify generated python docstrings escape quotes and backslashes."""
     path = tmp_path / "safe_description.py"
     source = "def explain():\n    return True\n"
     path.write_text(source, encoding="utf-8")
@@ -492,15 +637,7 @@ def test_generated_python_docstrings_escape_quotes_and_backslashes(tmp_path: Pat
 def test_generated_python_syntax_errors_are_identified_as_validation_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test generated python syntax errors are identified as validation failures.
-
-    Testa se erros de sintaxe Python gerados são identificados como falhas de validação, mesmo
-    que o código fonte original não tenha sido alterado.
-
-    Args:
-        tmp_path: Description of tmp_path.
-        monkeypatch: Description of monkeypatch.
-    """
+    """Verify generated python syntax errors are identified as validation failures."""
     path = tmp_path / "valid_source.py"
     source = "def ready():\n    return True\n"
     path.write_text(source, encoding="utf-8")
@@ -516,7 +653,7 @@ def test_generated_python_syntax_errors_are_identified_as_validation_failures(
 
 
 def test_replaced_class_docstring_gets_pep257_spacing(tmp_path: Path) -> None:
-    """Ensure replaced class docstrings retain the required surrounding spacing."""
+    """Verify replaced class docstring gets pep257 spacing."""
     path = tmp_path / "service.py"
     source = 'class Service:\n    """Old docs."""\n    def run(self):\n        return True\n'
     path.write_text(source, encoding="utf-8")
@@ -533,14 +670,7 @@ def test_replaced_class_docstring_gets_pep257_spacing(tmp_path: Path) -> None:
 
 
 def test_preserve_existing_documentation(tmp_path: Path) -> None:
-    """Test preserve existing documentation.
-
-    Verifica que a documentação existente seja preservada ao preparar o código, mesmo quando
-    novas descrições são fornecidas para funções específicas.
-
-    Args:
-        tmp_path: Description of tmp_path.
-    """
+    """Verify preserve existing documentation."""
     path = tmp_path / "documented.py"
     source = 'def ready():\n    """Human-written description."""\n    return True\n'
     path.write_text(source, encoding="utf-8")
