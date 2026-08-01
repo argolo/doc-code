@@ -13,11 +13,13 @@ from doc_gub.scope import resolve
 
 
 def test_resolve_combines_multiple_files_and_directories_without_duplicates(tmp_path: Path) -> None:
-    """Verifica que a função resolve combine múltiplos arquivos e diretórios em uma lista de caminhos únicos, eliminando duplicatas.
+    """Test resolve combines multiple files and directories without duplicates.
+
+    Verifica que a função resolve combine múltiplos arquivos e diretórios em uma lista de
+    caminhos únicos, eliminando duplicatas.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     first = tmp_path / "first.py"
     directory = tmp_path / "src"
@@ -27,18 +29,29 @@ def test_resolve_combines_multiple_files_and_directories_without_duplicates(tmp_
     second.write_text("pass\n", encoding="utf-8")
 
     class Repo(GitRepo):
-        """Representa um repositório de arquivos e diretórios, fornecendo métodos para manipulação de caminhos relativos dentro do seu escopo raiz."""
+        """Provide a repository test double.
+
+        Representa um repositório de arquivos e diretórios, fornecendo métodos para manipulação
+        de caminhos relativos dentro do seu escopo raiz.
+        """
 
         def __init__(self) -> None:
-            """Inicializa uma instância de Repo, definindo o diretório raiz para o caminho temporário atual."""
+            """Provide init.
+
+            Inicializa uma instância de Repo, definindo o diretório raiz para o caminho
+            temporário atual.
+            """
             self.root = tmp_path
 
         def relative_path(self, requested: Path) -> str:
-            """Retorna o caminho relativo de um arquivo ou diretório solicitado em relação à raiz do repositório, resolvendo quaisquer links simbólicos e combinando múltiplos componentes sem duplicatas.
+            """Provide relative path.
+
+            Retorna o caminho relativo de um arquivo ou diretório solicitado em relação à raiz do
+            repositório, resolvendo quaisquer links simbólicos e combinando múltiplos componentes
+            sem duplicatas.
 
             Args:
                 requested: Description of requested.
-
             """
             return requested.resolve().relative_to(self.root).as_posix()
 
@@ -57,19 +70,19 @@ def test_resolve_rejects_oversized_files_before_they_are_read(tmp_path: Path) ->
         """Minimal repository double rooted at the temporary directory."""
 
         def __init__(self) -> None:
-            """Inicializa uma instância de Repo, definindo o diretório raiz para um caminho
-            temporário.
+            """Inicializa uma instância de Repo.
 
+            Define o diretório raiz como um caminho temporário.
             """
             self.root = tmp_path
 
         def relative_path(self, requested: Path) -> str:
-            """Retorna o caminho relativo de um arquivo, resolvendo-o e comparando-o com o diretório
-            raiz do repositório.
+            """Retorna o caminho relativo de um arquivo.
+
+            Resolve o caminho e o compara com o diretório raiz do repositório.
 
             Args:
                 requested: O caminho do arquivo a ser processado.
-
             """
             return requested.resolve().relative_to(self.root).as_posix()
 
@@ -92,14 +105,37 @@ def test_default_exclusions_do_not_use_directories_above_the_repository(tmp_path
             self.root = root
 
         def relative_path(self, requested: Path) -> str:
-            """Retorna o caminho relativo de um arquivo ou diretório em relação ao diretório raiz do
-            repositório.
+            """Retorna o caminho relativo de um recurso.
+
+            Calcula o caminho em relação ao diretório raiz do repositório.
 
             Args:
                 requested: O caminho completo (Path) para o recurso cujo caminho relativo deve ser
                 determinado.
-
             """
             return requested.resolve().relative_to(self.root).as_posix()
 
     assert resolve(Repo(), [source], load(root)) == ["module.py"]
+
+
+def test_resolve_handles_a_changed_file_removed_before_selection(tmp_path: Path) -> None:
+    """Report an empty scope when a Git candidate disappears before it is inspected."""
+
+    class Repo(GitRepo):
+        """Repository double returning a stale changed-file entry."""
+
+        def __init__(self) -> None:
+            """Inicializa uma instância de Repo."""
+            self.root = tmp_path
+
+        def changed_files(self) -> list[str]:
+            """Retorna uma lista de strings contendo os nomes dos arquivos que foram alterados no
+            repositório.
+
+            """
+            return ["removed.py"]
+
+    settings = load(tmp_path, selection="changes")
+
+    with pytest.raises(DocGubError, match="No eligible Python"):
+        resolve(Repo(), None, settings)
