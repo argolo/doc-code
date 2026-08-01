@@ -12,7 +12,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make venv       Create the local virtual environment"
 	@echo "  make shell      Open a new shell with the virtual environment active"
-	@echo "  make install    Install Commitar and all development dependencies"
+	@echo "  make install    Install doc-gub and all development dependencies"
 	@echo "  make clear      Delete every ignored file (git clean -Xdf)"
 	@echo "  make build      Build wheel and source distribution in dist/"
 	@echo "  make test       Run the test suite"
@@ -45,7 +45,7 @@ test: install
 	$(PYTHON) -m pytest
 
 coverage: install
-	$(PYTHON) -m pytest --cov=commitar --cov-report=term-missing
+	$(PYTHON) -m pytest --cov=doc_gub --cov-report=term-missing
 
 lint: install
 	$(PYTHON) -m ruff check .
@@ -55,9 +55,11 @@ format: install
 	$(PYTHON) -m ruff format .
 
 typecheck: install
-	$(PYTHON) -m mypy commitar tests
+	$(PYTHON) -m mypy doc_gub tests
 
 audit: install
 	$(PYTHON) -m pip_audit
 
 check: lint typecheck test audit
+
+all: clear venv install build test format lint typecheck test audit format coverage
