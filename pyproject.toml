@@ -3,7 +3,7 @@ requires = ["setuptools>=83,<84"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "doc-gub"
+name = "doc-code"
 dynamic = ["version"]
 description = "Generate and safely apply AI-assisted source documentation."
 readme = "README.md"
@@ -50,25 +50,25 @@ dev = [
 ]
 
 [project.scripts]
-doc-gub = "doc_gub.cli:main"
+doc-code = "doc_code.cli:main"
 
 [tool.setuptools.dynamic]
-version = {attr = "doc_gub.__version__"}
+version = {attr = "doc_code.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["doc_gub*"]
+include = ["doc_code*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-doc_gub = ["py.typed"]
+doc_code = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-config --strict-markers --cov=doc_gub --cov-fail-under=85"
+addopts = "-q --strict-config --strict-markers --cov=doc_code --cov-fail-under=85"
 
 [tool.coverage.run]
 branch = true
-source = ["doc_gub"]
+source = ["doc_code"]
 
 [tool.coverage.report]
 show_missing = true
@@ -83,7 +83,7 @@ select = ["E4", "E7", "E9", "E501", "F", "I", "B", "UP", "D", "C90", "PLR0911", 
 ignore = ["B008"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["doc_gub"]
+known-first-party = ["doc_code"]
 
 [tool.ruff.lint.per-file-ignores]
 "example/funcoes_classicas.py" = ["D"]
