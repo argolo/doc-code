@@ -94,9 +94,71 @@ def test_reports_python_syntax_errors_with_file_line_and_source(
     result = CliRunner().invoke(cli.app, ["--check"])
 
     assert result.exit_code == 1
-    assert "Error: test_cli.py:17: invalid syntax" in result.output
+    assert "Skipped documentation: test_cli.py" in result.output
+    assert "Reason: test_cli.py:17: invalid syntax" in result.output
     assert "def broken(:" in result.output
     assert "^" in result.output
+
+
+def test_check_reports_invalid_files_without_skipping_other_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inspect every selected file even when one Python file cannot be parsed."""
+    (tmp_path / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+    (tmp_path / "missing.py").write_text("def missing():\n    pass\n", encoding="utf-8")
+
+    class Repo:
+        """Repository double rooted at the temporary directory."""
+
+        def __init__(self) -> None:
+            """Inicializa uma nova instância de Repo."""
+            self.root = tmp_path
+
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["broken.py", "missing.py"])
+
+    result = CliRunner().invoke(cli.app, ["--check"])
+
+    assert result.exit_code == 1
+    assert "Skipped documentation: broken.py" in result.output
+    assert "missing.py: module, missing" in result.output
+
+
+def test_generation_skips_invalid_files_and_continues_the_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bad source file does not prevent documentation for a later valid file."""
+    (tmp_path / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+    valid = tmp_path / "valid.py"
+    valid.write_text("def valid():\n    return True\n", encoding="utf-8")
+
+    class Repo:
+        """Repository double rooted at the temporary directory."""
+
+        def __init__(self) -> None:
+            """Inicializa uma instância de Repo.
+
+            Define o diretório raiz para o caminho
+            temporário.
+
+            """
+            self.root = tmp_path
+
+    settings = Settings(confirm=False, models=("test",))
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["broken.py", "valid.py"])
+    monkeypatch.setattr(
+        cli,
+        "documentation_for",
+        lambda _content, symbols, _settings: {symbol.name: "Generated docs." for symbol in symbols},
+    )
+
+    result = CliRunner().invoke(cli.app, ["broken.py", "valid.py"])
+
+    assert result.exit_code == 0, result.output
+    assert "Skipped documentation: broken.py" in result.output
+    assert "valid.py" in result.output
 
 
 def test_apply_writes_each_file_before_later_generation_failures(
@@ -288,7 +350,9 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
     monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
 
     def fake_documentation(_: str, symbols: list[Symbol], __: Settings) -> dict[str, str]:
-        """Uma função que recebe uma lista de símbolos e retorna um dicionário com as descrições
+        """Uma função que recebe descrições para os símbolos.
+
+        Retorna um dicionário com as descrições
         geradas para cada símbolo.
 
         Args:
