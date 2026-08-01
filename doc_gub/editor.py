@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 import difflib
 import hashlib
+import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import tomllib
@@ -29,11 +31,7 @@ _ESLINT_MAX_LEN = re.compile(
 
 @dataclass(frozen=True)
 class PreparedFile:
-    """Store a prepared file edit.
-
-    Uma estrutura de dados imutável que armazena as informações antes e depois das edições
-    propostas em um arquivo, incluindo um fingerprint e os símbolos afetados.
-    """
+    """Store an immutable, validated file edit and its source fingerprint."""
 
     path: Path
     before: str
@@ -45,11 +43,7 @@ class PreparedFile:
 
     @property
     def diff(self) -> str:
-        """Return the unified diff for the prepared edit.
-
-        Gera uma string no formato unified diff comparando o conteúdo original (before) com o
-        conteúdo editado (after).
-        """
+        """Return the unified diff for the prepared edit."""
         return "".join(
             difflib.unified_diff(
                 self.before.splitlines(keepends=True),
@@ -61,15 +55,22 @@ class PreparedFile:
 
 
 def fingerprint(content: str) -> str:
-    """Return a SHA-256 fingerprint for content.
-
-    Calcula um hash SHA256 de uma string de conteúdo para criar uma impressão digital única do
-    arquivo.
-
-    Args:
-        content: Description of content.
-    """
+    """Return a SHA-256 fingerprint for content."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _read_utf8(path: Path) -> str:
+    """Decode UTF-8 without universal-newline conversion."""
+    try:
+        return path.read_bytes().decode("utf-8")
+    except OSError as exc:
+        raise DocGubError(f"{path}: unable to read source file: {exc}") from exc
+
+
+def _line_ending(content: str) -> str:
+    """Return the first line-ending convention used by source content."""
+    match = re.search(r"\r\n|\r|\n", content)
+    return match.group(0) if match else "\n"
 
 
 def _python_code_shape(content: str, filename: str = "<unknown>") -> str:
@@ -77,60 +78,28 @@ def _python_code_shape(content: str, filename: str = "<unknown>") -> str:
     tree = ast.parse(content, filename=filename)
 
     class RemoveDocstrings(ast.NodeTransformer):
-        """Remove Python docstrings from an AST.
-
-        Um NodeTransformer AST usado para percorrer e modificar nós de código Python, removendo
-        docstrings em módulos, classes e funções.
-        """
+        """Remove Python docstrings from an AST."""
 
         def visit_Module(self, node: ast.Module) -> ast.Module:
-            """Remove a module docstring.
-
-            Visita um nó de módulo (ast.Module), garantindo que as docstrings iniciais sejam
-            removidas do corpo do módulo.
-
-            Args:
-                node: Description of node.
-            """
+            """Remove a module docstring."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
 
         def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
-            """Remove a class docstring.
-
-            Visita um nó de definição de classe (ast.ClassDef), garantindo que as docstrings
-            iniciais sejam removidas do corpo da classe.
-
-            Args:
-                node: Description of node.
-            """
+            """Remove a class docstring."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
-            """Remove a function docstring.
-
-            Visita um nó de definição de função (ast.FunctionDef), garantindo que as docstrings
-            iniciais sejam removidas do corpo da função.
-
-            Args:
-                node: Description of node.
-            """
+            """Remove a function docstring."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
 
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
-            """Remove an async function docstring.
-
-            Visita um nó de definição de função assíncrona (ast.AsyncFunctionDef), garantindo que
-            as docstrings iniciais sejam removidas do corpo da função.
-
-            Args:
-                node: Description of node.
-            """
+            """Remove an async function docstring."""
             self.generic_visit(node)
             _remove_leading_docstring(node.body)
             return node
@@ -139,14 +108,7 @@ def _python_code_shape(content: str, filename: str = "<unknown>") -> str:
 
 
 def _remove_leading_docstring(body: list[ast.stmt]) -> None:
-    """Remove the leading docstring from a statement body.
-
-    Função utilitária para remover a primeira declaração de string (docstring) de uma lista de
-    nós de instrução (body).
-
-    Args:
-        body: Description of body.
-    """
+    """Remove the leading docstring from a statement body."""
     if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
         if isinstance(body[0].value.value, str):
             body.pop(0)
@@ -183,13 +145,8 @@ def _documentation_indent(lines: list[str], symbol: Symbol, suffix: str) -> str:
     return symbol.indent + "    "
 
 
-def _line_length(path: Path, suffix: str) -> int:
-    """Read the nearest project line-length rule for generated documentation."""
-    return _python_line_length(path) if suffix == ".py" else _javascript_line_length(path)
-
-
-def _python_line_length(path: Path) -> int:
-    """Read Ruff's configured line length from the nearest Python project."""
+def _python_rendering_options(path: Path, fallback_format: str) -> tuple[int, str]:
+    """Read Ruff line length and pydocstyle convention from the nearest Python project."""
     for directory in (path.parent, *path.parents):
         config = directory / "pyproject.toml"
         if not config.is_file():
@@ -198,15 +155,30 @@ def _python_line_length(path: Path) -> int:
             with config.open("rb") as handle:
                 data = tomllib.load(handle)
         except (OSError, tomllib.TOMLDecodeError):
-            return _DEFAULT_PYTHON_LINE_LENGTH
-        ruff = data.get("tool", {}).get("ruff", {})
+            return _DEFAULT_PYTHON_LINE_LENGTH, fallback_format
+        tool = data.get("tool", {})
+        ruff = tool.get("ruff", {}) if isinstance(tool, dict) else {}
+        if not isinstance(ruff, dict):
+            return _DEFAULT_PYTHON_LINE_LENGTH, fallback_format
         line_length = ruff.get("line-length")
-        return (
+        normalized_line_length = (
             line_length
             if isinstance(line_length, int) and line_length > 0
             else _DEFAULT_PYTHON_LINE_LENGTH
         )
-    return _DEFAULT_PYTHON_LINE_LENGTH
+        lint = ruff.get("lint", {})
+        pydocstyle = lint.get("pydocstyle", {}) if isinstance(lint, dict) else {}
+        convention = pydocstyle.get("convention") if isinstance(pydocstyle, dict) else None
+        python_format = convention if convention in {"google", "numpy"} else fallback_format
+        return normalized_line_length, python_format
+    return _DEFAULT_PYTHON_LINE_LENGTH, fallback_format
+
+
+def _rendering_options(path: Path, settings: Settings) -> tuple[int, str]:
+    """Return target-project line length and Python documentation format."""
+    if path.suffix == ".py":
+        return _python_rendering_options(path, settings.python_format)
+    return _javascript_line_length(path), settings.python_format
 
 
 def _javascript_line_length(path: Path) -> int:
@@ -226,19 +198,29 @@ def _javascript_line_length(path: Path) -> int:
 
 
 def _pep257_separator(
-    rendered: list[str], lines: list[str], following_index: int, symbol: Symbol, suffix: str
+    rendered: list[str],
+    lines: list[str],
+    following_index: int,
+    symbol: Symbol,
+    suffix: str,
+    newline: str,
 ) -> None:
     """Keep one blank line between module/class docstrings and the following statement."""
     if suffix != ".py" or symbol.kind not in {"module", "class"}:
         return
     if following_index < len(lines) and lines[following_index].strip():
-        rendered.append("\n")
+        rendered.append(newline)
 
 
 def _validate_javascript(content: str, suffix: str, path: Path) -> None:
     """Parse generated JS/TS before it can be applied to the working tree."""
     if suffix == ".js":
-        command = ["node", "--check"]
+        runtime = shutil.which("node")
+        if not runtime:
+            raise DocGubError(
+                f"{path}: JavaScript validation requires `node` on PATH; no file was changed."
+            )
+        command = [runtime, "--check"]
     else:
         compiler = shutil.which("tsc")
         if not compiler:
@@ -255,9 +237,15 @@ def _validate_javascript(content: str, suffix: str, path: Path) -> None:
         temporary.write(content)
         candidate = Path(temporary.name)
     try:
-        result = subprocess.run(
-            [*command, str(candidate)], text=True, capture_output=True, check=False
-        )
+        try:
+            result = subprocess.run(
+                [*command, str(candidate)], text=True, capture_output=True, check=False
+            )
+        except OSError as exc:
+            raise DocGubError(
+                f"{path}: unable to run {Path(command[0]).name} validation: {exc}; "
+                "no file was changed."
+            ) from exc
     finally:
         candidate.unlink(missing_ok=True)
     if result.returncode:
@@ -265,68 +253,73 @@ def _validate_javascript(content: str, suffix: str, path: Path) -> None:
         raise DocGubError(f"{path}: generated documentation failed {suffix} validation: {detail}")
 
 
-def prepare(
-    path: Path,
+def _selected_symbols(
     symbols: list[Symbol],
     descriptions: Mapping[str, str | Documentation],
     settings: Settings,
-    selected_symbols: list[Symbol] | None = None,
-) -> PreparedFile:
-    """Prepara um objeto PreparedFile, calculando as diferenças e validando a edição.
+    selected_symbols: list[Symbol] | None,
+) -> list[Symbol]:
+    """Return explicitly selected symbols or eligible generated symbols."""
+    if selected_symbols is not None:
+        return selected_symbols
+    return [
+        symbol
+        for symbol in symbols
+        if needs_documentation(symbol, settings.coverage, settings.existing_docs)
+        and symbol.name in descriptions
+    ]
 
-    `selected_symbols` limita a alteração a símbolos já gerados, permitindo gravar resultados
-    incrementais no modo de escopo por símbolo.
-    """
-    before = path.read_text(encoding="utf-8")
-    if len(before.encode("utf-8")) > settings.max_file_bytes:
-        raise DocGubError(f"{path}: exceeds max_file_bytes.")
-    selected = (
-        selected_symbols
-        if selected_symbols is not None
-        else [
-            item
-            for item in symbols
-            if needs_documentation(item, settings.coverage, settings.existing_docs)
-            and item.name in descriptions
-        ]
+
+def _insert_documentation(
+    lines: list[str],
+    symbol: Symbol,
+    description: str | Documentation,
+    path: Path,
+    settings: Settings,
+    python_format: str,
+    newline: str,
+    line_length: int,
+) -> bool:
+    """Render and insert one symbol's documentation, returning whether it changed."""
+    if path.suffix == ".py" and not symbol.has_doc and symbol.kind != "module":
+        if _is_inline_python_suite(lines, symbol):
+            return False
+    indentation = _documentation_indent(lines, symbol, path.suffix)
+    documentation = render(
+        symbol,
+        description,
+        path.suffix,
+        python_format,
+        line_length,
+        indentation,
     )
-    ignored = [item for item in symbols if item not in selected]
-    lines = before.splitlines(keepends=True)
-    for symbol in reversed(selected):
-        if path.suffix == ".py" and not symbol.has_doc and symbol.kind != "module":
-            if _is_inline_python_suite(lines, symbol):
-                ignored.append(symbol)
-                continue
-        indentation = _documentation_indent(lines, symbol, path.suffix)
-        documentation = render(
-            symbol,
-            descriptions.get(symbol.name, ""),
-            path.suffix,
-            settings.python_format,
-            _line_length(path, path.suffix),
-            indentation,
-        )
-        rendered = [f"{indentation}{row}\n" if row else "\n" for row in documentation.splitlines()]
-        if (
-            symbol.has_doc
-            and settings.existing_docs == "replace"
-            and symbol.doc_start
-            and symbol.doc_end
-        ):
-            _pep257_separator(rendered, lines, symbol.doc_end, symbol, path.suffix)
-            lines[symbol.doc_start - 1 : symbol.doc_end] = rendered
-        elif not symbol.has_doc:
-            if path.suffix == ".py" and symbol.kind == "module":
-                insertion = _module_insertion(lines)
-            elif path.suffix == ".py":
-                insertion = (symbol.body_line or symbol.line + 1) - 1
-            else:
-                insertion = symbol.line - 1
-            _pep257_separator(rendered, lines, insertion, symbol, path.suffix)
-            lines[insertion:insertion] = rendered
-        else:
-            ignored.append(symbol)
-    after = "".join(lines)
+    rendered = [
+        f"{indentation}{row}{newline}" if row else newline for row in documentation.splitlines()
+    ]
+    if (
+        symbol.has_doc
+        and settings.existing_docs == "replace"
+        and symbol.doc_start
+        and symbol.doc_end
+    ):
+        _pep257_separator(rendered, lines, symbol.doc_end, symbol, path.suffix, newline)
+        lines[symbol.doc_start - 1 : symbol.doc_end] = rendered
+        return True
+    if symbol.has_doc:
+        return False
+    if path.suffix == ".py" and symbol.kind == "module":
+        insertion = _module_insertion(lines)
+    elif path.suffix == ".py":
+        insertion = (symbol.body_line or symbol.line + 1) - 1
+    else:
+        insertion = symbol.line - 1
+    _pep257_separator(rendered, lines, insertion, symbol, path.suffix, newline)
+    lines[insertion:insertion] = rendered
+    return True
+
+
+def _validate_edit(before: str, after: str, path: Path) -> None:
+    """Verify that an edit changes documentation only and remains syntactically valid."""
     if path.suffix == ".py":
         before_shape = _python_code_shape(before, str(path))
         try:
@@ -339,8 +332,43 @@ def prepare(
             ) from exc
         if before_shape != after_shape:
             raise DocGubError(f"{path}: refusing an edit that changes Python code.")
-    if after != before and path.suffix in {".js", ".jsx", ".ts", ".tsx"}:
+    elif after != before and path.suffix in {".js", ".jsx", ".ts", ".tsx"}:
         _validate_javascript(after, path.suffix, path)
+
+
+def prepare(
+    path: Path,
+    symbols: list[Symbol],
+    descriptions: Mapping[str, str | Documentation],
+    settings: Settings,
+    selected_symbols: list[Symbol] | None = None,
+) -> PreparedFile:
+    """Prepare and validate an edit, optionally limited to generated symbols."""
+    if path.is_symlink():
+        raise DocGubError(f"{path}: symbolic links are not supported; no file was changed.")
+    before = _read_utf8(path)
+    if len(before.encode("utf-8")) > settings.max_file_bytes:
+        raise DocGubError(f"{path}: exceeds max_file_bytes.")
+    selected = _selected_symbols(symbols, descriptions, settings, selected_symbols)
+    ignored = [item for item in symbols if item not in selected]
+    lines = before.splitlines(keepends=True)
+    newline = _line_ending(before)
+    line_length, python_format = _rendering_options(path, settings)
+    for symbol in reversed(selected):
+        inserted = _insert_documentation(
+            lines,
+            symbol,
+            descriptions.get(symbol.name, ""),
+            path,
+            settings,
+            python_format,
+            newline,
+            line_length,
+        )
+        if not inserted:
+            ignored.append(symbol)
+    after = "".join(lines)
+    _validate_edit(before, after, path)
     changed = tuple(item for item in selected if item not in ignored)
     return PreparedFile(
         path, before, after, fingerprint(before), tuple(symbols), changed, tuple(ignored)
@@ -348,15 +376,47 @@ def prepare(
 
 
 def apply(prepared: PreparedFile) -> None:
-    """Apply a prepared edit when its fingerprint is current.
-
-    Aplica as edições contidas em um objeto PreparedFile ao sistema de arquivos, mas somente se o
-    fingerprint do arquivo atual corresponder ao esperado.
-
-    Args:
-        prepared: Description of prepared.
-    """
-    current = prepared.path.read_text(encoding="utf-8")
+    """Atomically apply an edit when its source fingerprint is still current."""
+    if prepared.path.is_symlink():
+        raise DocGubError(
+            f"{prepared.path}: became a symbolic link after preview; file was not written."
+        )
+    current = _read_utf8(prepared.path)
     if fingerprint(current) != prepared.fingerprint:
         raise DocGubError(f"{prepared.path}: changed after preview; file was not written.")
-    prepared.path.write_text(prepared.after, encoding="utf-8", newline="")
+    mode = stat.S_IMODE(prepared.path.stat().st_mode)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            prefix=f".{prepared.path.name}.",
+            dir=prepared.path.parent,
+            delete=False,
+        ) as temporary:
+            temporary.write(prepared.after)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        temporary_path.chmod(mode)
+        os.replace(temporary_path, prepared.path)
+        temporary_path = None
+        try:
+            directory = os.open(prepared.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            pass
+    except OSError as exc:
+        raise DocGubError(
+            f"{prepared.path}: unable to apply the atomic file update: {exc}"
+        ) from exc
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
