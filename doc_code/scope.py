@@ -8,7 +8,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from .config import Settings
-from .errors import DocGubError
+from .errors import DocGubError, NoEligibleFilesError
 from .git import GitRepo
 
 SUPPORTED_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx"}
@@ -92,7 +92,7 @@ def resolve(repo: GitRepo, requested: list[Path] | None, settings: Settings) -> 
         )
         if oversized:
             raise DocGubError(f"No eligible files: exceeds max_file_bytes: {', '.join(oversized)}.")
-        raise DocGubError("No eligible Python, JavaScript, or TypeScript files found.")
+        raise NoEligibleFilesError("No eligible Python, JavaScript, or TypeScript files found.")
     if len(files) > settings.max_files_per_request:
         raise DocGubError(
             "The scope exceeds max_files_per_request; narrow the path or increase the limit."
