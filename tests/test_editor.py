@@ -1,4 +1,9 @@
-"""Módulo de testes unitários para verificar o comportamento do sistema de geração e edição de documentação 'doc_gub', cobrindo diversos cenários como formatação Python, aninhamento assíncrono, e substituição/preservação de JSDoc."""
+"""Test editor behavior.
+
+Módulo de testes unitários para verificar o comportamento do sistema de geração e edição de
+documentação 'doc_gub', cobrindo diversos cenários como formatação Python, aninhamento assíncrono, e
+substituição/preservação de JSDoc.
+"""
 
 from __future__ import annotations
 
@@ -19,13 +24,16 @@ from doc_gub.symbols import Documentation, discover, source_for_symbol
     [("google", "Args:"), ("numpy", "Parameters"), ("sphinx", ":param value:")],
 )
 def test_python_formats_and_stale_file_protection(tmp_path: Path, fmt: str, marker: str) -> None:
-    """Testa o comportamento do sistema ao detectar alterações em arquivos após a fase de preparação (preview), garantindo que a aplicação falhe com um erro específico ('changed after preview') se o conteúdo for modificado concorrentemente.
+    """Test python formats and stale file protection.
+
+    Testa o comportamento do sistema ao detectar alterações em arquivos após a fase de preparação
+    (preview), garantindo que a aplicação falhe com um erro específico ('changed after preview') se
+    o conteúdo for modificado concorrentemente.
 
     Args:
         tmp_path: Description of tmp_path.
         fmt: Description of fmt.
         marker: Description of marker.
-
     """
     path = tmp_path / "sample.py"
     source = "def calculate(value):\n    return value * 2\n"
@@ -52,11 +60,13 @@ def test_python_formats_and_stale_file_protection(tmp_path: Path, fmt: str, mark
 
 
 def test_python_nested_async_and_jsdoc(tmp_path: Path) -> None:
-    """Verifica a descoberta de símbolos em código Python assíncrono aninhado e JavaScript com JSDoc, garantindo que os métodos e módulos sejam corretamente identificados.
+    """Test python nested async and jsdoc.
+
+    Verifica a descoberta de símbolos em código Python assíncrono aninhado e JavaScript com
+    JSDoc, garantindo que os métodos e módulos sejam corretamente identificados.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     python = "class Service:\n    async def fetch(self, item):\n        return item\n"
     symbols = discover(python, ".py")
@@ -161,6 +171,39 @@ def test_typescript_and_tsx_discovery_use_syntax_trees() -> None:
     assert [(symbol.name, symbol.args) for symbol in tsx_symbols] == [("App", ("name",))]
 
 
+def test_javascript_syntax_errors_include_file_and_location() -> None:
+    """Reject malformed JavaScript before documentation generation begins."""
+    with pytest.raises(SyntaxError) as raised:
+        discover("export function broken( {\n", ".js", "broken.js")
+
+    assert raised.value.filename == "broken.js"
+    assert raised.value.lineno == 1
+    assert raised.value.offset is not None
+
+
+def test_typescript_discovers_class_arrow_fields_and_nested_classes() -> None:
+    """Qualify callable fields and nested classes with their containing class."""
+    source = (
+        "class Outer {\n"
+        "  callback = (value: string) => value;\n"
+        "  method() {\n"
+        "    class Inner { run() {} }\n"
+        "  }\n"
+        "}\n"
+    )
+
+    symbols = discover(source, ".ts")
+
+    assert [symbol.name for symbol in symbols] == [
+        "Outer",
+        "Outer.callback",
+        "Outer.method",
+        "Outer.Inner",
+        "Outer.Inner.run",
+    ]
+    assert next(symbol for symbol in symbols if symbol.name == "Outer.callback").args == ("value",)
+
+
 def test_python_docstrings_follow_the_nearest_ruff_line_length(tmp_path: Path) -> None:
     """Verifica o limite de linha definido pelo Ruff.
 
@@ -169,7 +212,6 @@ def test_python_docstrings_follow_the_nearest_ruff_line_length(tmp_path: Path) -
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     project = tmp_path / "python-project"
     project.mkdir()
@@ -201,7 +243,6 @@ def test_javascript_docstrings_follow_the_nearest_eslint_max_len(tmp_path: Path)
 
     Args:
         tmp_path: Caminho temporário para arquivos e diretórios.
-
     """
     project = tmp_path / "javascript-project"
     project.mkdir()
@@ -229,11 +270,13 @@ def test_javascript_docstrings_follow_the_nearest_eslint_max_len(tmp_path: Path)
 
 
 def test_only_documentation_is_changed_and_existing_jsdoc_can_be_replaced(tmp_path: Path) -> None:
-    """Testa que a documentação de módulos e funções pode ser atualizada ou substituída, tanto em arquivos Python quanto JavaScript.
+    """Test only documentation is changed and existing jsdoc can be replaced.
+
+    Testa que a documentação de módulos e funções pode ser atualizada ou substituída, tanto em
+    arquivos Python quanto JavaScript.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     python_path = tmp_path / "safe.py"
     python = (
@@ -271,12 +314,14 @@ def test_only_documentation_is_changed_and_existing_jsdoc_can_be_replaced(tmp_pa
 def test_typescript_validation_uses_tsc_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verifica se a validação de TypeScript utiliza o compilador `tsc` quando ele está disponível no ambiente, simulando o comportamento do sistema operacional e da biblioteca subjacente.
+    """Test typescript validation uses tsc when available.
+
+    Verifica se a validação de TypeScript utiliza o compilador `tsc` quando ele está disponível
+    no ambiente, simulando o comportamento do sistema operacional e da biblioteca subjacente.
 
     Args:
         tmp_path: Description of tmp_path.
         monkeypatch: Description of monkeypatch.
-
     """
     captured: list[str] = []
     monkeypatch.setattr(
@@ -284,11 +329,12 @@ def test_typescript_validation_uses_tsc_when_available(
     )
 
     def fake_run(command: list[str], **_: object) -> object:
-        """Simula a execução de um comando e registra os argumentos em 'captured'. Retorna um objeto simulado de resultado com código de retorno 0.
+        """Simula a execução de um comando e registra os argumentos em 'captured'.
+
+        Retorna um objeto simulado de resultado com código de retorno 0.
 
         Args:
-            command: Description of command.
-
+                    command: Description of command.
         """
         captured.extend(command)
         return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
@@ -311,7 +357,6 @@ def test_jsx_validation_uses_typescript_compiler(
 
         Args:
             command: A lista de strings que representa o comando a ser executado.
-
         """
         captured.extend(command)
         return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
@@ -329,11 +374,13 @@ def test_jsx_validation_uses_typescript_compiler(
 
 
 def test_inline_python_suites_are_left_untouched(tmp_path: Path) -> None:
-    """Verifica que o conteúdo de um arquivo Python criado temporariamente não é alterado durante o processo de preparação, mesmo quando funções são descobertas e preparadas.
+    """Test inline python suites are left untouched.
+
+    Verifica que o conteúdo de um arquivo Python criado temporariamente não é alterado durante o
+    processo de preparação, mesmo quando funções são descobertas e preparadas.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     path = tmp_path / "inline.py"
     source = "def ready(): return True\n"
@@ -348,11 +395,13 @@ def test_inline_python_suites_are_left_untouched(tmp_path: Path) -> None:
 
 
 def test_python_docstring_is_inserted_after_a_multiline_signature(tmp_path: Path) -> None:
-    """Verifica se o docstring é corretamente inserido após uma assinatura de função que ocupa múltiplas linhas, simulando um cenário de análise de código Python.
+    """Test python docstring is inserted after a multiline signature.
+
+    Verifica se o docstring é corretamente inserido após uma assinatura de função que ocupa
+    múltiplas linhas, simulando um cenário de análise de código Python.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     path = tmp_path / "test_cli.py"
     source = (
@@ -378,11 +427,13 @@ def test_python_docstring_is_inserted_after_a_multiline_signature(tmp_path: Path
 
 
 def test_class_docstring_is_inserted_before_decorated_first_method(tmp_path: Path) -> None:
-    """Verifica se a docstring da classe é inserida antes do primeiro método decorado na saída do código.
+    """Test class docstring is inserted before decorated first method.
+
+    Verifica se a docstring da classe é inserida antes do primeiro método decorado na saída do
+    código.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     path = tmp_path / "finance.py"
     source = (
@@ -414,11 +465,13 @@ def test_class_docstring_is_inserted_before_decorated_first_method(tmp_path: Pat
 
 
 def test_generated_python_docstrings_escape_quotes_and_backslashes(tmp_path: Path) -> None:
-    """Verifica se o docstring gerado é corretamente escapado, lidando com aspas e barras invertidas.
+    """Test generated python docstrings escape quotes and backslashes.
+
+    Verifica se o docstring gerado é corretamente escapado, lidando com aspas e barras
+    invertidas.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     path = tmp_path / "safe_description.py"
     source = "def explain():\n    return True\n"
@@ -439,12 +492,14 @@ def test_generated_python_docstrings_escape_quotes_and_backslashes(tmp_path: Pat
 def test_generated_python_syntax_errors_are_identified_as_validation_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Testa se erros de sintaxe Python gerados são identificados como falhas de validação, mesmo que o código fonte original não tenha sido alterado.
+    """Test generated python syntax errors are identified as validation failures.
+
+    Testa se erros de sintaxe Python gerados são identificados como falhas de validação, mesmo
+    que o código fonte original não tenha sido alterado.
 
     Args:
         tmp_path: Description of tmp_path.
         monkeypatch: Description of monkeypatch.
-
     """
     path = tmp_path / "valid_source.py"
     source = "def ready():\n    return True\n"
@@ -478,11 +533,13 @@ def test_replaced_class_docstring_gets_pep257_spacing(tmp_path: Path) -> None:
 
 
 def test_preserve_existing_documentation(tmp_path: Path) -> None:
-    """Verifica que a documentação existente seja preservada ao preparar o código, mesmo quando novas descrições são fornecidas para funções específicas.
+    """Test preserve existing documentation.
+
+    Verifica que a documentação existente seja preservada ao preparar o código, mesmo quando
+    novas descrições são fornecidas para funções específicas.
 
     Args:
         tmp_path: Description of tmp_path.
-
     """
     path = tmp_path / "documented.py"
     source = 'def ready():\n    """Human-written description."""\n    return True\n'
