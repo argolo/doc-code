@@ -17,7 +17,7 @@ language = "pt-BR"
 python_format = "google"
 javascript_format = "jsdoc"
 output = "apply"
-confirm = true
+confirm = false
 
 [limits]
 max_files_per_request = 50

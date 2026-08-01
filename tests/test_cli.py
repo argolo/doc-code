@@ -268,7 +268,10 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
     path.write_text(source, encoding="utf-8")
 
     class Repo:
+        """Representa um repositório de código."""
+
         def __init__(self) -> None:
+            """Inicializa uma nova instância de Repo."""
             self.root = tmp_path
 
     received: list[list[str]] = []
@@ -285,6 +288,18 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
     monkeypatch.setattr(cli, "MAX_AI_ATTEMPTS", 1)
 
     def fake_documentation(_: str, symbols: list[Symbol], __: Settings) -> dict[str, str]:
+        """Uma função que recebe uma lista de símbolos e retorna um dicionário com as descrições
+        geradas para cada símbolo.
+
+        Args:
+            _: Um argumento ignorado, tipicamente usado para parâmetros que não são utilizados na
+            função.
+            symbols: Uma lista de objetos do tipo Symbol, representando os símbolos a serem
+            documentados.
+            __: Outro argumento ignorado, geralmente usado para configurações ou contextos
+            adicionais.
+
+        """
         received.append([symbol.name for symbol in symbols])
         return {symbol.name: "Generated docs." for symbol in symbols}
 
