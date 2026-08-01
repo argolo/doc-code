@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -11,6 +13,29 @@ from .git import GitRepo
 
 SUPPORTED_SUFFIXES = {".py", ".js", ".jsx", ".ts", ".tsx"}
 DEFAULT_EXCLUDED_PARTS = {".git", "node_modules", "dist", "build", ".venv", "venv", "__pycache__"}
+
+
+def _matches(relative: str, patterns: tuple[str, ...]) -> bool:
+    """Match root and nested paths consistently for include and exclude patterns."""
+    normalized = relative.replace("\\", "/")
+    return any(
+        fnmatch(candidate, pattern)
+        for pattern in patterns
+        for candidate in (normalized, f"/{normalized}")
+    )
+
+
+def _walk_candidates(root: Path, source: Path) -> Iterator[str]:
+    """Yield files while pruning excluded and symbolic-link directories early."""
+    for directory, subdirectories, filenames in os.walk(source, followlinks=False):
+        current = Path(directory)
+        subdirectories[:] = sorted(
+            name
+            for name in subdirectories
+            if name not in DEFAULT_EXCLUDED_PARTS and not (current / name).is_symlink()
+        )
+        for filename in sorted(filenames):
+            yield (current / filename).relative_to(root).as_posix()
 
 
 def _is_oversized(repo: GitRepo, relative: str, settings: Settings) -> bool:
@@ -27,40 +52,25 @@ def _is_oversized(repo: GitRepo, relative: str, settings: Settings) -> bool:
 
 
 def _eligible(repo: GitRepo, relative: str, settings: Settings) -> bool:
-    """Return whether a relative path is eligible.
-
-    Verifica se um caminho relativo é elegível para inclusão, considerando extensões suportadas,
-    exclusões padrão, regras personalizadas de exclusão/inclusão e a estrutura do repositório.
-
-    Args:
-        repo: Description of repo.
-        relative: Description of relative.
-        settings: Description of settings.
-    """
+    """Return whether a worktree-relative path satisfies every scope rule."""
     path = repo.root / relative
-    if not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
+    if path.is_symlink() or not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
+        return False
+    try:
+        path.resolve(strict=True).relative_to(repo.root.resolve(strict=True))
+    except (OSError, ValueError):
         return False
     if _is_oversized(repo, relative, settings):
         return False
     if any(part in DEFAULT_EXCLUDED_PARTS for part in Path(relative).parts):
         return False
-    normalized = relative.replace("\\", "/")
-    if any(
-        fnmatch(normalized, pattern) or fnmatch("/" + normalized, pattern)
-        for pattern in settings.exclude
-    ):
+    if _matches(relative, settings.exclude):
         return False
-    return not settings.include or any(fnmatch(normalized, pattern) for pattern in settings.include)
+    return not settings.include or _matches(relative, settings.include)
 
 
 def resolve(repo: GitRepo, requested: list[Path] | None, settings: Settings) -> list[str]:
-    """Resolve paths, Git changes, or the repository into one deduplicated file scope.
-
-    Args:
-        repo: Description of repo.
-        requested: Description of requested.
-        settings: Description of settings.
-    """
+    """Resolve paths, Git changes, or a repository into a deduplicated file scope."""
     if requested:
         candidates: list[str] = []
         for requested_path in requested:
@@ -69,13 +79,11 @@ def resolve(repo: GitRepo, requested: list[Path] | None, settings: Settings) -> 
             if source.is_file():
                 candidates.append(relative)
             else:
-                candidates.extend(
-                    item.relative_to(repo.root).as_posix() for item in source.rglob("*")
-                )
+                candidates.extend(_walk_candidates(repo.root, source))
     elif settings.selection == "changes":
         candidates = repo.changed_files()
     else:
-        candidates = [item.relative_to(repo.root).as_posix() for item in repo.root.rglob("*")]
+        candidates = list(_walk_candidates(repo.root, repo.root))
     unique_candidates = set(candidates)
     files = sorted(item for item in unique_candidates if _eligible(repo, item, settings))
     if not files:
