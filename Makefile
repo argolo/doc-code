@@ -1,5 +1,8 @@
 SHELL := /bin/sh
 
+VENV ?= .venv
+PYTHON := $(VENV)/bin/python
+PIP := $(VENV)/bin/pip
 UV ?= uv
 
 .DEFAULT_GOAL := help
@@ -24,18 +27,19 @@ help:
 	@echo "  make all        Run checks and build distributions"
 
 venv:
-	$(UV) venv
+	@test -x "$(PYTHON)" || python3 -m venv "$(VENV)"
 
 shell: venv
-	@echo "Opening a new shell with .venv active. Exit it with 'exit'."
-	@. .venv/bin/activate && exec "$${SHELL:-/bin/sh}" -i
+	@echo "Opening a new shell with $(VENV) active. Exit it with 'exit'."
+	@. "$(VENV)/bin/activate" && exec "$${SHELL:-/bin/sh}" -i
 
 install:
+	pip3 install uv
 	$(UV) sync --locked --all-extras
 
 clean:
-	rm -rf -- build dist doc_code.egg-info .pytest_cache .ruff_cache .mypy_cache
-	rm -f -- .coverage
+	@echo "Deleting files ignored by Git, including virtual environments and local .env files."
+	git clean -Xdf
 
 clear: clean
 
