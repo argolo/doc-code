@@ -10,10 +10,16 @@ doc-gub --output apply
 
 Em automações, use `--yes` junto com `--output apply`. Cada arquivo é gravado assim que sua geração e validação terminam; falhas posteriores não desfazem arquivos já aplicados. O arquivo é comparado com a prévia imediatamente antes da escrita; se tiver sido alterado, o `doc-gub` não o sobrescreve.
 
+## Instalação e requisitos
+
+O `doc-gub` requer Python 3.11 ou superior e Git no `PATH`. Para processar JavaScript, instale Node.js; para TypeScript/TSX, instale também o compilador `tsc` (por exemplo, `npm install --global typescript`). Esses executáveis são usados para validar a sintaxe gerada antes de qualquer arquivo ser alterado.
+
+Para desenvolvimento, use `uv sync --locked --all-extras`; para instalar o pacote publicado, use `pip install doc-gub`.
+
 ## Uso
 
 ```shell
-doc-gub                         # mudanças Git (staging tem prioridade; inclui arquivos não rastreados)
+doc-gub                         # mudanças Git (staged, unstaged e arquivos não rastreados)
 doc-gub src/a.py src/b.ts       # um ou mais arquivos/diretórios específicos
 doc-gub --selection repository  # todos os arquivos elegíveis
 doc-gub --coverage all --format numpy
@@ -38,12 +44,12 @@ Crie um arquivo inicial com `doc-gub config init`. As seções `[ai]`, `[documen
 | --- | --- | --- |
 | `provider` | `openai`, `gemini` ou `ollama` · `ollama` | Seleciona o provedor que gera as descrições. |
 | `model` | string · depende do provedor | Modelo único usado quando `models` estiver vazio: `qwen2.5-coder:14b`, `gpt-5.6-sol` ou `gemini-3.6-flash`. |
-| `models` | lista de 1 a 3 strings · `qwen2.5-coder:14b`, `gemma4:e4b` | Candidatos usados em rotação nas tentativas; tem precedência sobre `model`. |
+| `models` | lista de até 3 strings · `qwen2.5-coder:14b`, `gemma4:e4b` | Candidatos usados em rotação nas tentativas; tem precedência sobre `model`. Uma lista vazia usa somente `model`. |
 | `endpoint` | URL ou ausência · endpoint padrão do provedor | Substitui o endpoint do provedor. Provedores autenticados exigem HTTPS fora de loopback. |
 | `max_input_tokens` | inteiro positivo · `12000` | Limite estimado para o prompt enviado ao modelo. |
 | `context_window_tokens` | inteiro positivo · `32768` | Janela total do modelo; deve comportar entrada e saída. |
 | `max_output_tokens` | inteiro positivo · `800` | Limite de tokens da resposta gerada. |
-| `temperature` | número · `0.2` | Controla a variação da resposta do modelo. |
+| `temperature` | número · `0.2` | Controla a variação da resposta; deve ser não negativa e fica entre 0 e 2 para OpenAI e Gemini. |
 | `timeout_seconds` | inteiro positivo · `60` | Tempo máximo de cada chamada ao provedor. |
 
 `max_input_tokens + max_output_tokens` não pode exceder `context_window_tokens`.
@@ -53,7 +59,7 @@ Crie um arquivo inicial com `doc-gub config init`. As seções `[ai]`, `[documen
 | Opção | Valores / padrão | Efeito |
 | --- | --- | --- |
 | `selection` | `changes`, `repository` · `changes` | Define se processa mudanças Git ou todos os arquivos elegíveis. |
-| `coverage` | `missing`, `minimal`, `all` · `missing` | `all` torna elegíveis também símbolos já documentados, exceto com `existing_docs = "preserve"`; `missing` e `minimal` consideram apenas os sem docstring. |
+| `coverage` | `missing`, `minimal`, `all` · `missing` | `missing` inclui todos os símbolos sem docstring; `minimal` inclui somente módulo e API pública de primeiro nível sem docstring; `all` também torna elegíveis os já documentados, exceto com `existing_docs = "preserve"`. |
 | `existing_docs` | `preserve`, `replace` · `preserve` | Com `preserve`, exclui da IA todo símbolo que já tenha docstring; com `replace`, permite sua reescrita. A regra vale para módulos, classes, funções e métodos. |
 | `request_scope` | `file`, `symbol` · `file` | Define o contexto por chamada: arquivo completo ou um símbolo. Não muda quais símbolos podem ser gerados. |
 | `language` | string não vazia · `English` | Idioma das descrições solicitadas ao modelo. |
