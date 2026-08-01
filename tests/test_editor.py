@@ -11,7 +11,7 @@ from doc_gub import editor
 from doc_gub.config import load
 from doc_gub.editor import apply, prepare
 from doc_gub.errors import DocGubError
-from doc_gub.symbols import Documentation, discover
+from doc_gub.symbols import Documentation, discover, source_for_symbol
 
 
 @pytest.mark.parametrize(
@@ -81,9 +81,91 @@ def test_python_nested_async_and_jsdoc(tmp_path: Path) -> None:
     assert "@param {any} right Second addend." in result.after
 
 
+def test_python_discovery_includes_every_parameter_kind() -> None:
+    """Request documentation for positional-only, variadic, and keyword-only parameters."""
+    source = (
+        "class Service:\n"
+        "    def work(self, first, /, second, *items, option, **extra):\n"
+        "        return None\n"
+    )
+
+    method = next(symbol for symbol in discover(source, ".py") if symbol.name == "Service.work")
+
+    assert method.args == ("first", "second", "items", "option", "extra")
+
+
+def test_javascript_class_methods_are_discovered_with_unique_names() -> None:
+    """Discover class methods and keep same-named methods unambiguous."""
+    source = (
+        "class First {\n"
+        "  run(value) { return value; }\n"
+        "}\n"
+        "class Second {\n"
+        "  run(value) { return value; }\n"
+        "}\n"
+    )
+
+    symbols = discover(source, ".js")
+
+    assert [symbol.name for symbol in symbols] == ["First", "First.run", "Second", "Second.run"]
+    assert [symbol.args for symbol in symbols if symbol.name.endswith(".run")] == [
+        ("value",),
+        ("value",),
+    ]
+
+
+def test_javascript_discovery_and_symbol_scope_ignore_braces_in_strings() -> None:
+    """Braces in JavaScript literals do not close a class or function scope."""
+    source = (
+        "class Service {\n"
+        '  label = "}";\n'
+        "  first() {}\n"
+        "  second() {}\n"
+        "}\n\n"
+        "function describe() {\n"
+        '  const brace = "}";\n'
+        "  return brace;\n"
+        "}\n\n"
+        "function next() {}\n"
+    )
+
+    symbols = discover(source, ".js")
+    describe = next(symbol for symbol in symbols if symbol.name == "describe")
+
+    assert [symbol.name for symbol in symbols] == [
+        "Service",
+        "Service.first",
+        "Service.second",
+        "describe",
+        "next",
+    ]
+    assert source_for_symbol(source, describe, ".js") == (
+        'function describe() {\n  const brace = "}";\n  return brace;\n}\n'
+    )
+
+
+def test_typescript_and_tsx_discovery_use_syntax_trees() -> None:
+    """Discover generic methods and destructured JSX arrow-function parameters."""
+    typescript = (
+        "export default class Repository<T> {\n"
+        "  async save(value: T, ...items: T[]): Promise<T> { return value; }\n"
+        "}\n"
+    )
+    tsx = "export const App = ({ name }: Props) => <main>{name}</main>;\n"
+
+    ts_symbols = discover(typescript, ".ts")
+    tsx_symbols = discover(tsx, ".tsx")
+
+    assert [symbol.name for symbol in ts_symbols] == ["Repository", "Repository.save"]
+    assert ts_symbols[1].args == ("value", "items")
+    assert [(symbol.name, symbol.args) for symbol in tsx_symbols] == [("App", ("name",))]
+
+
 def test_python_docstrings_follow_the_nearest_ruff_line_length(tmp_path: Path) -> None:
-    """Verifica se as docstrings de funções seguem o limite de linha definido pelo Ruff (52
-    caracteres), mesmo quando há descrições longas.
+    """Verifica o limite de linha definido pelo Ruff.
+
+    As docstrings de funções devem seguir o limite de 52
+    caracteres, mesmo quando há descrições longas.
 
     Args:
         tmp_path: Description of tmp_path.
@@ -215,6 +297,35 @@ def test_typescript_validation_uses_tsc_when_available(
     editor._validate_javascript("const value: number = 1;\n", ".ts", tmp_path / "sample.ts")
 
     assert captured[:5] == ["/usr/local/bin/tsc", "--noEmit", "--noCheck", "--pretty", "false"]
+
+
+def test_jsx_validation_uses_typescript_compiler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate JSX with a JSX-aware compiler instead of Node's JS-only checker."""
+    captured: list[str] = []
+    monkeypatch.setattr(editor.shutil, "which", lambda _: "/usr/local/bin/tsc")
+
+    def fake_run(command: list[str], **_kwargs: object) -> object:
+        """Executa um comando simulado e captura os argumentos.
+
+        Args:
+            command: A lista de strings que representa o comando a ser executado.
+
+        """
+        captured.extend(command)
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(
+        editor.subprocess,
+        "run",
+        fake_run,
+    )
+
+    editor._validate_javascript("export const App = () => <div />;\n", ".jsx", tmp_path / "App.jsx")
+
+    assert captured[0] == "/usr/local/bin/tsc"
+    assert ["--jsx", "preserve"] == captured[6:8]
 
 
 def test_inline_python_suites_are_left_untouched(tmp_path: Path) -> None:
