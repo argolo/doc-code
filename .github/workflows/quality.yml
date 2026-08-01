@@ -1,0 +1,22 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check .
+      - run: python -m mypy doc_gub tests
+      - run: python -m pytest --cov=doc_gub --cov-report=term-missing
+      - run: python -m build
+      - run: python -m pip_audit
