@@ -17,4 +17,4 @@ confirm = false
 
 [limits]
 max_files_per_request = 10
-max_diff_bytes = 900
+max_diff_bytes = 1000
