@@ -43,19 +43,22 @@ def _loading(message: str):
 
 
 def _show(item: PreparedFile, model: str, elapsed: float) -> None:
-    """Exibe um resumo factual sobre os resultados da geração de documentação (arquivos, símbolos, tempo).
+    """Display a documentation generation summary.
+
+    Exibe um resumo factual sobre os resultados da geração de documentação (arquivos, símbolos,
+    tempo).
 
     Args:
         item: Description of item.
         model: Description of model.
         elapsed: Description of elapsed.
-
     """
     relative = item.path.as_posix()
     typer.echo()
     typer.secho(relative, fg=typer.colors.CYAN, bold=True)
     typer.echo(
-        f"Symbols: {len(item.symbols)} | changed: {len(item.changed)} | ignored: {len(item.ignored)}"
+        f"Symbols: {len(item.symbols)} | changed: {len(item.changed)} | "
+        f"ignored: {len(item.ignored)}"
     )
     typer.echo(f"Model: {model} | Generated in {elapsed:.2f}s")
     if item.diff:
@@ -179,7 +182,8 @@ def doc_gub(
                     _show_check(missing)
                 if inspection_failures:
                     typer.secho(
-                        f"Documentation check could not inspect {len(inspection_failures)} file(s).",
+                        "Documentation check could not inspect "
+                        f"{len(inspection_failures)} file(s).",
                         fg=typer.colors.RED,
                     )
                 raise typer.Exit(1)
@@ -237,12 +241,14 @@ def doc_gub(
                         relative
                         if settings.request_scope == "file"
                         else (
-                            f"{request_number}/{len(requests)} {relative}:{requested_symbols[0].name}"
+                            f"{request_number}/{len(requests)} "
+                            f"{relative}:{requested_symbols[0].name}"
                         )
                     )
                     try:
                         with _loading(
-                            f"Generating docs [{label}] | model: {candidate} ({attempt}/{MAX_AI_ATTEMPTS})..."
+                            f"Generating docs [{label}] | model: {candidate} "
+                            f"({attempt}/{MAX_AI_ATTEMPTS})..."
                         ):
                             generated = documentation_for(
                                 source,
@@ -268,7 +274,8 @@ def doc_gub(
                                 )
                                 if current_target is None:
                                     raise DocGubError(
-                                        f"{relative}: symbol `{target.name}` changed during generation."
+                                        f"{relative}: symbol `{target.name}` changed "
+                                        "during generation."
                                     )
                                 item = prepare(
                                     file_path,
