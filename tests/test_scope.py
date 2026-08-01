@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from doc_gub import scope
-from doc_gub.config import Settings, load
-from doc_gub.errors import DocGubError
-from doc_gub.git import GitRepo
-from doc_gub.scope import resolve
+from doc_code import scope
+from doc_code.config import Settings, load
+from doc_code.errors import DocGubError
+from doc_code.git import GitRepo
+from doc_code.scope import resolve
 
 
 def test_resolve_combines_multiple_files_and_directories_without_duplicates(tmp_path: Path) -> None:
