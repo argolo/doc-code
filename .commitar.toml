@@ -16,5 +16,5 @@ output = "commit"
 confirm = false
 
 [limits]
-max_files_per_request = 10
+max_files_per_request = 100
 max_diff_bytes = 10000
