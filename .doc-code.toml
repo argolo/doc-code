@@ -10,14 +10,13 @@ timeout_seconds = 180
 
 [documentation]
 selection = "repository"
-coverage = "all"
-existing_docs = "preserve"
+coverage = "missing"
 request_scope = "symbol"
 language = "pt-BR"
 python_format = "google"
 javascript_format = "jsdoc"
 output = "apply"
-confirm = false
+confirm = true
 
 [limits]
 max_files_per_request = 50
