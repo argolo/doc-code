@@ -546,7 +546,7 @@ def test_only_documentation_is_changed_and_existing_jsdoc_can_be_replaced(tmp_pa
         js_path,
         discover(javascript, ".js"),
         {"add": "Add two values."},
-        load(tmp_path, coverage="all", existing_docs="replace", selection="repository"),
+        load(tmp_path, coverage="all", selection="repository"),
     )
 
     assert "Old docs." not in replaced.after
@@ -731,19 +731,19 @@ def test_replaced_class_docstring_gets_pep257_spacing(tmp_path: Path) -> None:
         path,
         discover(source, ".py"),
         {"Service": "Provide service operations"},
-        load(tmp_path, coverage="all", existing_docs="replace"),
+        load(tmp_path, coverage="all"),
     )
 
     assert '    """Provide service operations."""\n\n    def run' in prepared.after
     ast.parse(prepared.after)
 
 
-def test_preserve_existing_documentation(tmp_path: Path) -> None:
-    """Verify preserve existing documentation."""
+def test_missing_coverage_preserves_existing_documentation(tmp_path: Path) -> None:
+    """Verify missing coverage does not replace existing documentation."""
     path = tmp_path / "documented.py"
     source = 'def ready():\n    """Human-written description."""\n    return True\n'
     path.write_text(source, encoding="utf-8")
-    settings = load(tmp_path, coverage="all", existing_docs="preserve", selection="repository")
+    settings = load(tmp_path, coverage="missing", selection="repository")
 
     result = prepare(path, discover(source, ".py"), {"ready": "New description."}, settings)
 
