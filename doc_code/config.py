@@ -37,7 +37,6 @@ class Settings:
     timeout_seconds: int = 60
     selection: str = "changes"
     coverage: str = "missing"
-    existing_docs: str = "preserve"
     request_scope: str = "file"
     language: str = "English"
     python_format: str = "google"
@@ -82,18 +81,20 @@ timeout_seconds = 180
 [documentation]
 selection = "repository"
 coverage = "missing"
-existing_docs = "preserve"
 request_scope = "symbol"
 language = "English"
 python_format = "google"
 javascript_format = "jsdoc"
 output = "apply"
-confirm = false
+confirm = true
 
 [limits]
 max_files_per_request = 50
 max_file_bytes = 100000
-exclude = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js", "**/package-lock.json", "*.md", "*.toml", "CNAME", "Makefile", "LICENSE", ".venv"]
+exclude = [
+  "**/node_modules/**", "**/dist/**", "**/build/**", "**/*.min.js",
+  "**/package-lock.json", "*.md", "*.toml", "CNAME", "Makefile", "LICENSE", ".venv"
+]
 """
 
 _SECTION_OPTIONS = {
@@ -111,7 +112,6 @@ _SECTION_OPTIONS = {
     "documentation": {
         "selection",
         "coverage",
-        "existing_docs",
         "request_scope",
         "language",
         "python_format",
@@ -135,7 +135,6 @@ _CHOICE_OPTIONS = {
     "provider": {"openai", "gemini", "ollama"},
     "selection": {"changes", "repository"},
     "coverage": {"missing", "minimal", "all"},
-    "existing_docs": {"preserve", "replace"},
     "request_scope": {"file", "symbol"},
     "python_format": {"google", "numpy", "sphinx"},
     "output": {"preview", "apply"},
@@ -206,7 +205,6 @@ def _env() -> dict[str, Any]:
         "timeout_seconds",
         "selection",
         "coverage",
-        "existing_docs",
         "request_scope",
         "language",
         "python_format",
