@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#fbfcfa" />
+    <meta name="description" content="Doc Code — documentação de código com IA, revisável antes de aplicar." />
+    <title>Doc Code — documentação clara, código preservado</title>
+    <style>
+      :root { --ink:#251916; --muted:#756762; --line:#eadfda; --paper:#fffaf8; --soft:#f8eeea; --accent:#b94b3e; --accent-dark:#8f342b; --code:#261916; --code-text:#fff0e9; --radius:14px; }
+      * { box-sizing:border-box; }
+      html { scroll-behavior:smooth; }
+      body { margin:0; padding-top:74px; color:var(--ink); background:var(--paper); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.55; }
+      code,pre,.wordmark,.eyebrow,.command-label,.language-picker { font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace; }
+      a { color:inherit; text-decoration:none; }
+      .shell { width:min(1120px,calc(100% - 48px)); margin:0 auto; }
+      header { position:fixed; z-index:10; top:0; left:0; display:flex; align-items:center; justify-content:space-between; width:100%; height:74px; padding:0 max(24px,calc((100% - 1120px)/2)); border-bottom:1px solid var(--line); background:color-mix(in srgb,var(--paper) 94%,transparent); backdrop-filter:blur(12px); }
+      .wordmark { font-size:1.05rem; font-weight:800; letter-spacing:-.03em; }
+      .wordmark span,.eyebrow,.feature-number,.step span { color:var(--accent); }
+      nav { display:flex; align-items:center; gap:25px; color:var(--muted); font-size:.9rem; }
+      nav a:hover { color:var(--accent); }
+      .nav-button { padding:9px 14px; color:var(--paper); background:var(--ink); border-radius:8px; font-weight:650; }
+      .language-picker { padding:8px 9px; color:var(--ink); background:transparent; border:1px solid var(--line); border-radius:7px; font-weight:700; font-size:.78rem; cursor:pointer; }
+      .hero { display:grid; grid-template-columns:1.05fr .95fr; gap:72px; align-items:center; padding:106px 0 82px; }
+      .eyebrow { margin:0 0 18px; font-size:.76rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+      h1 { max-width:650px; margin:0; font-size:clamp(2.85rem,6vw,5.4rem); line-height:.99; letter-spacing:-.07em; }
+      .lede { max-width:570px; margin:28px 0 34px; color:var(--muted); font-size:1.13rem; }
+      .actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+      .button { display:inline-flex; align-items:center; min-height:44px; padding:0 18px; border-radius:8px; font-size:.92rem; font-weight:700; }
+      .button.primary { color:white; background:var(--accent); }.button.primary:hover{background:var(--accent-dark);}.button.secondary{border:1px solid var(--line);}
+      .terminal { overflow:hidden; color:var(--code-text); background:var(--code); border-radius:var(--radius); box-shadow:0 20px 45px rgba(23,32,28,.14); }
+      .terminal-bar { display:flex; gap:6px; align-items:center; height:42px; padding:0 15px; background:#1b100e; }.dot{width:9px;height:9px;border-radius:50%;background:#694640;}
+      .terminal-body { min-height:310px; padding:25px 25px 22px; font-size:.78rem; line-height:1.72; }.command-label{color:#eeaa9e}.success{color:#e6ad72}.dim{color:#b5a09a}.terminal-title,.terminal-title strong{color:#f3c2b9}.diff-add{color:#e8c7a4}.diff-note{color:#ef9b8e}
+      .trust { border-top:1px solid var(--line); border-bottom:1px solid var(--line); }.trust-inner{display:grid;grid-template-columns:repeat(3,1fr)}.trust-item{padding:28px 32px 29px 0}.trust-item+.trust-item{padding-left:32px;border-left:1px solid var(--line)}.trust-item strong{display:block;margin-bottom:4px;font-size:.96rem}.trust-item span{color:var(--muted);font-size:.88rem}
+      section { padding:104px 0; }.section-head{display:grid;grid-template-columns:.8fr 1.2fr;gap:64px;margin-bottom:44px}h2{margin:0;font-size:clamp(2rem,3.5vw,3rem);line-height:1.05;letter-spacing:-.055em}.section-head p,.configuration p{max-width:540px;margin:5px 0 0;color:var(--muted)}
+      .feature-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }.feature{min-height:206px;padding:24px;background:white;border:1px solid var(--line);border-radius:var(--radius)}.feature-number{display:block;margin-bottom:42px;font:700 .78rem "SFMono-Regular",Consolas,monospace}.feature h3{margin:0 0 8px;font-size:1rem;letter-spacing:-.02em}.feature p{margin:0;color:var(--muted);font-size:.9rem}.command{display:block;width:fit-content;margin:14px 0 10px;padding:5px 8px;color:var(--accent-dark);background:#f5dfd8;border-radius:5px;font:700 .82rem "SFMono-Regular",Consolas,monospace}
+      .workflow{background:var(--soft)}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:28px}.step{padding-top:24px;border-top:2px solid var(--ink)}.step span{font:800 .78rem "SFMono-Regular",Consolas,monospace}.step h3{margin:13px 0 8px;font-size:1.08rem;letter-spacing:-.025em}.step p{margin:0;color:var(--muted);font-size:.9rem}
+      .configuration{display:grid;grid-template-columns:.9fr 1.1fr;gap:68px;align-items:center}.snippet{margin:0;padding:25px;overflow-x:auto;color:var(--code-text);background:var(--code);border-radius:var(--radius);font-size:.82rem;line-height:1.72}.key{color:#8fcca8}.value{color:#f5d784}.section-divider{width:80%;height:10px;margin-inline:auto;background:var(--accent);opacity:.45}
+      footer{padding:35px 0;border-top:1px solid var(--line);color:var(--muted);font-size:.83rem}.footer-content{display:flex;justify-content:space-between;gap:20px}.footer-content strong{color:var(--ink)}
+      @media(max-width:800px){.shell{width:min(100% - 36px,620px)}nav a:not(.nav-button){display:none}.hero,.section-head,.configuration{grid-template-columns:1fr;gap:34px}.hero{padding:72px 0 65px}.trust-inner,.feature-grid,.steps{grid-template-columns:1fr}.trust-item+.trust-item{padding-left:0;border-left:0;border-top:1px solid var(--line)}.trust-item{padding:23px 0}section{padding:72px 0}.section-head{margin-bottom:32px}}
+      @media(max-width:460px){header{padding-inline:18px}.language-picker{display:none}.footer-content{flex-direction:column;gap:8px}.terminal-body{padding:20px;font-size:.75rem}}
+    </style>
+  </head>
+  <body>
+    <header>
+      <a class="wordmark" href="#top"><span>&gt;_</span> doc-code</a>
+      <nav aria-label="Navegação principal">
+        <a href="#top" data-i18n="navHome">Início</a><a href="#recursos" data-i18n="navFeatures">Recursos</a><a href="#providers" data-i18n="navProviders">Provedores</a><a href="#configuracao" data-i18n="navConfig">Configuração</a><a href="#inicio-rapido" data-i18n="navQuickstart">Início rápido</a>
+        <select class="language-picker" id="language-picker" aria-label="Idioma"><option value="pt-BR">PT-BR</option><option value="en">EN</option></select>
+        <a class="nav-button" href="https://github.com/argolo/doc-code" target="_blank" rel="noreferrer" data-i18n="navGithub">Ver no GitHub</a>
+      </nav>
+    </header>
+    <main id="top">
+      <div class="shell hero">
+        <div>
+          <p class="eyebrow" data-i18n="eyebrow">Documentação de código com IA</p>
+          <h1 data-i18n="heroTitle">Seu padrão definido.<br>Seu time só roda.</h1>
+          <p class="lede" data-i18n="heroLede">Escolha uma vez o modelo, o idioma, a cobertura e o modo de saída. Depois, <code>doc-code</code> encontra as lacunas, documenta no padrão do projeto e segue o fluxo que você desenhou.</p>
+          <div class="actions"><a class="button primary" href="#inicio-rapido" data-i18n="quickstart">Início rápido</a><a class="button secondary" href="https://github.com/argolo/doc-code" target="_blank" rel="noreferrer" data-i18n="repository">Repositório ↗</a></div>
+        </div>
+        <div class="terminal" aria-label="Execução do terminal Doc Code"><div class="terminal-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="terminal-body">
+          <div><span class="command-label">$</span> doc-code</div><div class="dim">Generating docs [1/4 doc_code/ai.py:prompt] | model: gemma4:e4b (1/3)...</div><div class="success">Applied documentation: doc_code/ai.py:prompt</div><br>
+          <div class="dim">Generating docs [2/4 doc_code/ai.py:documentation_for] | model: gemma4:e4b (1/3)...</div><div class="success">Applied documentation: doc_code/ai.py:documentation_for</div><br>
+          <div class="dim">Generating docs [3/4 doc_code/scope.py:collect] | model: qwen2.5-coder:14b (1/3)...</div><div class="success">Applied documentation: doc_code/scope.py:collect</div><br>
+          <div class="terminal-title"><strong>Documentation applied to 3 file(s).</strong></div><div class="dim">Configuration: .doc-code.toml · output: apply · confirm: false</div>
+        </div></div>
+      </div>
+      <div class="trust"><div class="shell trust-inner">
+        <div class="trust-item"><strong data-i18n="trustReviewTitle">Uma vez configurado</strong><span data-i18n="trustReviewText">O comando diário é só <code>doc-code</code>.</span></div>
+        <div class="trust-item"><strong data-i18n="trustScopeTitle">Flexível por escolha</strong><span data-i18n="trustScopeText">Do símbolo ao repositório, você define o alcance que faz sentido.</span></div>
+        <div class="trust-item"><strong data-i18n="trustSafeTitle">Consistente por padrão</strong><span data-i18n="trustSafeText">Formato, idioma e regras iguais para todo o time.</span></div>
+      </div></div>
+      <section class="shell" id="recursos"><div class="section-head"><h2 data-i18n="featuresTitle">Configura uma vez.<br>Padroniza sempre.</h2><p data-i18n="featuresText">Cada projeto pede um nível de autonomia. O doc-code deixa a estratégia explícita no repositório, para que cada execução entregue o resultado esperado sem repetir flags.</p></div>
+        <div class="feature-grid">
+          <article class="feature"><span class="feature-number" data-i18n="featureOne">01 / escopo</span><h3 data-i18n="featureOneTitle">O tamanho certo para cada rotina</h3><p data-i18n="featureOneText">Mudanças do Git, arquivos específicos ou o repositório todo. Você escolhe o alcance uma vez e não pensa nisso de novo.</p><code class="command">selection = "repository"</code></article>
+          <article class="feature"><span class="feature-number" data-i18n="featureTwo">02 / autonomia</span><h3 data-i18n="featureTwoTitle">Do preview ao apply direto</h3><p data-i18n="featureTwoText">Use revisão quando ela agrega valor ou aplique automaticamente para transformar documentação em uma etapa natural do fluxo.</p><code class="command">output = "apply"</code></article>
+          <article class="feature"><span class="feature-number" data-i18n="featureThree">03 / padrão</span><h3 data-i18n="featureThreeTitle">A mesma linguagem em todo lugar</h3><p data-i18n="featureThreeText">Idioma, formato e cobertura vivem no projeto. O resultado fica coerente, independentemente de quem executa.</p><code class="command">python_format = "google"</code></article>
+        </div>
+      </section>
+      <div class="section-divider"></div>
+      <section class="shell" id="providers"><div class="section-head"><h2 data-i18n="providersTitle">Escolha seu<br>provedor de IA.</h2><p data-i18n="providersText">Conecte um modelo hospedado quando quiser começar rapidamente ou rode a geração localmente para manter o código no seu ambiente.</p></div>
+        <div class="feature-grid">
+          <article class="feature"><span class="feature-number">OPENAI</span><h3 data-i18n="openaiTitle">Modelos de ponta</h3><p data-i18n="openaiText">Use a API da OpenAI para gerar documentação precisa com o modelo escolhido pelo projeto.</p><code class="command">provider = "openai"</code></article>
+          <article class="feature"><span class="feature-number">GEMINI</span><h3 data-i18n="geminiTitle">Uma alternativa direta</h3><p data-i18n="geminiText">Use Gemini com a mesma experiência de configuração e revisão no terminal.</p><code class="command">provider = "gemini"</code></article>
+          <article class="feature"><span class="feature-number">OLLAMA</span><h3 data-i18n="ollamaTitle">Privacidade local</h3><p data-i18n="ollamaText">Rode modelos de código localmente, sem credencial e com o código sob seu controle.</p><code class="command">provider = "ollama"</code></article>
+        </div>
+      </section>
+      <section class="workflow" id="configuracao"><div class="shell"><div class="section-head"><h2 data-i18n="configSectionTitle">Um arquivo define<br>o jeito do time.</h2><p data-i18n="configSectionText">Versione um <code>.doc-code.toml</code> junto ao código. Ele transforma preferências dispersas em um padrão compartilhado, reproduzível e simples de usar.</p></div>
+        <div class="configuration"><div><p class="eyebrow" data-i18n="configEyebrow">Configuração por repositório</p><h2 data-i18n="configTitle">A complexidade fica aqui.<br>Não no comando.</h2><p data-i18n="configText">Modelos, escopo, cobertura, formato e automação ficam declarados no projeto. Para o dia a dia, basta <code>doc-code</code>.</p></div>
+          <pre class="snippet"><code><span class="key">[ai]</span>
+<span class="key">provider</span> = <span class="value">"ollama"</span>
+<span class="key">models</span> = <span class="value">["gemma4:e4b", "qwen2.5-coder:14b", "gemma4:12b-mlx"]</span>
+<span class="key">endpoint</span> = <span class="value">"http://localhost:11434/api/generate"</span>
+<span class="key">max_input_tokens</span> = <span class="value">3048</span>
+<span class="key">context_window_tokens</span> = <span class="value">16384</span>
+<span class="key">max_output_tokens</span> = <span class="value">512</span>
+<span class="key">temperature</span> = <span class="value">0.1</span>
+<span class="key">timeout_seconds</span> = <span class="value">180</span>
+
+<span class="key">[documentation]</span>
+<span class="key">selection</span> = <span class="value">"repository"</span>
+<span class="key">coverage</span> = <span class="value">"missing"</span>
+<span class="key">request_scope</span> = <span class="value">"symbol"</span>
+<span class="key">language</span> = <span class="value">"pt-BR"</span>
+<span class="key">python_format</span> = <span class="value">"google"</span>
+<span class="key">javascript_format</span> = <span class="value">"jsdoc"</span>
+<span class="key">output</span> = <span class="value">"apply"</span>
+<span class="key">confirm</span> = <span class="value">false</span>
+
+<span class="key">[limits]</span>
+<span class="key">max_files_per_request</span> = <span class="value">50</span>
+<span class="key">max_file_bytes</span> = <span class="value">1000000</span>
+<span class="key">exclude</span> = <span class="value">["**/node_modules/**", "**/dist/**", "**/build/**", ...]</span></code></pre>
+        </div></div></section>
+      <section class="shell"><div class="section-head"><h2 data-i18n="workflowTitle">Um comando.<br>O fluxo que você escolheu.</h2><p data-i18n="workflowText">O projeto decide as regras; o time não precisa lembrá-las. Da execução assistida à automação, a experiência é sempre a mesma: <code>doc-code</code>.</p></div>
+        <div class="steps"><article class="step"><span data-i18n="stepOne">01 / definir</span><h3 data-i18n="stepOneTitle">Declare a política do projeto</h3><code class="command">doc-code config init</code><p data-i18n="stepOneText">Configure uma vez como o projeto seleciona, escreve e aplica documentação.</p></article><article class="step"><span data-i18n="stepTwo">02 / versionar</span><h3 data-i18n="stepTwoTitle">Compartilhe o padrão</h3><code class="command">.doc-code.toml</code><p data-i18n="stepTwoText">O mesmo arquivo acompanha o repositório e elimina decisões repetidas em cada máquina.</p></article><article class="step"><span data-i18n="stepThree">03 / executar</span><h3 data-i18n="stepThreeTitle">Rode sem pensar em flags</h3><code class="command">doc-code</code><p data-i18n="stepThreeText">A ferramenta faz exatamente o que a configuração do projeto determina.</p></article></div>
+      </section>
+      <section class="workflow" id="inicio-rapido"><div class="shell configuration"><div><p class="eyebrow" data-i18n="quickstart">Início rápido</p><h2 data-i18n="quickTitle">Configure hoje.<br>Simplifique todo dia.</h2><p data-i18n="quickText">Instale, crie o arquivo de configuração e registre nele as preferências do projeto. A partir daí, documentação consistente cabe em um único comando.</p><div class="actions"><a class="button primary" href="https://github.com/argolo/doc-code" target="_blank" rel="noreferrer" data-i18n="openRepository">Abrir repositório ↗</a></div></div>
+        <pre class="snippet"><code><span class="dim"># Instale</span>
+pip install doc-code
+
+<span class="dim"># Crie os padrões do projeto</span>
+doc-code config init
+
+<span class="dim"># Defina o fluxo do projeto em .doc-code.toml</span>
+
+<span class="dim"># No dia a dia</span>
+doc-code</code></pre>
+      </div></section>
+    </main>
+    <footer><div class="shell footer-content"><span><strong>&gt;_ doc-code</strong> · <span data-i18n="designedBy">Projetado por</span> <a href="https://argolo.dev" target="_blank" rel="noreferrer">argolo.dev</a></span><span><a href="https://github.com/argolo/doc-code" target="_blank" rel="noreferrer">argolo/doc-code</a> · MIT License</span></div></footer>
+    <script>
+      const translations={en:{navHome:"Home",navFeatures:"Features",navProviders:"Providers",navConfig:"Configuration",navQuickstart:"Quick start",navGithub:"View on GitHub",eyebrow:"AI-assisted code documentation",heroTitle:"Clear code.<br>Context intact.",heroLede:"Generate docstrings for Python, JavaScript, and TypeScript. Review every change in a diff before you choose to apply it.",quickstart:"Quick start",repository:"Repository ↗",terminalPreview:"Documentation preview",terminalQuestion:"Apply changes? [y/N]: y",terminalDone:"Documentation applied",trustReviewTitle:"Always reviewable",trustReviewText:"See the diff before a file is ever written.",trustScopeTitle:"From symbol to repository",trustScopeText:"Document Git changes, specific paths, or the entire project.",trustSafeTitle:"Made for your code",trustSafeText:"Syntax validation before changes are applied.",featuresTitle:"Document what<br>matters now.",featuresText:"Doc Code finds undocumented symbols and works at the right scale: one change, a public API, or your whole repository.",featureOne:"01 / selection",featureOneTitle:"Start with changes",featureOneText:"With no arguments, it uses staged, unstaged, and untracked files from Git.",featureTwo:"02 / coverage",featureTwoTitle:"Control coverage",featureTwoText:"Fill only what is missing, the public API, or all existing documentation.",featureThree:"03 / language",featureThreeTitle:"Write in your project's language",featureThreeText:"Choose the language and docstring format your team already uses.",providersTitle:"Choose your<br>AI provider.",providersText:"Connect a hosted model to get started quickly, or run generation locally to keep code in your environment.",openaiTitle:"Frontier models",openaiText:"Use the OpenAI API to generate precise documentation with your project's selected model.",geminiTitle:"A straightforward alternative",geminiText:"Use Gemini with the same terminal configuration and review experience.",ollamaTitle:"Local privacy",ollamaText:"Run coding models locally without credentials and keep code under your control.",configSectionTitle:"One repository.<br>One writing standard.",configSectionText:"Version a <code>.doc-code.toml</code> alongside your code and align provider, language, format, and limits for the whole team.",configEyebrow:"Repository configuration",configTitle:"Fewer flags.<br>More consistency.",configText:"With project defaults, daily work is simply running <code>doc-code</code>. It respects the configuration and shows a preview before writing.",workflowTitle:"From preview<br>to apply.",workflowText:"The decision stays with you. Generate documentation, read the change, and only then apply it — interactively or automatically.",stepOne:"01 / generate",stepOneTitle:"Find eligible symbols",stepOneText:"Use current changes or name a file, directory, or the whole repository.",stepTwo:"02 / review",stepTwoTitle:"Read the diff",stepTwoText:"The preview shows exactly which docstrings will be added to the code.",stepThree:"03 / apply",stepThreeTitle:"Write when ready",stepThreeText:"For automation, add <code>--yes</code> while retaining syntax validation.",quickTitle:"From install<br>to explained code.",quickText:"Install the package, create the initial configuration, and generate a preview. Doc Code writes nothing until you ask.",openRepository:"Open repository ↗",designedBy:"Designed by"}};
+      Object.assign(translations.en,{heroTitle:"What the code does.<br>Why it matters.",heroLede:"Docstrings do not repeat implementation. They record intent, contracts, and context for the person who changes this code next.",trustSafeTitle:"Respects what is already written",trustSafeText:"Existing docs stay intact and syntax is validated before apply.",featuresTitle:"Documentation is not<br>automatic commentary.",featuresText:"Doc Code looks for symbols that do not yet explain their responsibility — then helps record what a reader cannot learn from a function body alone.",featureOne:"01 / priority",featureOneTitle:"Start with what changed",featureOneText:"Documentation follows moving code: by default, the focus is the current Git changes.",featureTwo:"02 / context",featureTwoTitle:"Give context at the right scale",featureTwoText:"Use a file for broad context or a symbol to focus on one responsibility.",featureThree:"03 / convention",featureThreeTitle:"Respect the project's voice",featureThreeText:"Pick a language and format; Google, NumPy, Sphinx, and JSDoc need not become another discussion.",workflowTitle:"Every explanation<br>passes through you.",workflowText:"A convincing description has to survive the reading of the person who maintains the system. Doc Code previews it and only writes with your approval.",stepOne:"01 / discover",stepOneTitle:"Find real gaps",stepTwo:"02 / evaluate",stepTwoTitle:"Read like a maintainer",stepTwoText:"The diff makes each addition explicit, so descriptions that do not help are easy to reject.",stepThreeTitle:"Write safely"});
+      Object.assign(translations.en,{heroTitle:"Your standard, defined.<br>Your team just runs it.",heroLede:"Choose the model, language, coverage, and output once. Then <code>doc-code</code> finds gaps and documents code the way your project expects.",trustReviewTitle:"Configured once",trustReviewText:"The daily command is simply <code>doc-code</code>.",trustScopeTitle:"Flexible by choice",trustScopeText:"From one symbol to the whole repository, set the scope that fits.",trustSafeTitle:"Consistent by default",trustSafeText:"One format, language, and set of rules for the whole team.",featuresTitle:"Configure once.<br>Standardize always.",featuresText:"Every project needs a different level of autonomy. Doc Code makes that strategy explicit in the repository, so each run delivers the expected result without repeated flags.",featureOne:"01 / scope",featureOneTitle:"The right scale for every routine",featureOneText:"Git changes, selected paths, or the whole repository. Choose scope once and stop thinking about it.",featureTwo:"02 / autonomy",featureTwoTitle:"From preview to direct apply",featureTwoText:"Review when it adds value, or apply automatically to make documentation a natural part of the workflow.",featureThree:"03 / standard",featureThreeTitle:"One language everywhere",featureThreeText:"Language, format, and coverage live in the project. Results stay consistent, whoever runs it.",configSectionTitle:"One file defines<br>the team's way of working.",configSectionText:"Version a <code>.doc-code.toml</code> alongside the code. It turns scattered preferences into a shared, repeatable standard.",configTitle:"Complexity lives here.<br>Not in the command.",configText:"Models, scope, coverage, format, and automation are declared in the project. Day to day, just run <code>doc-code</code>.",workflowTitle:"One command.<br>The workflow you chose.",workflowText:"The project decides the rules; the team does not need to remember them. From assisted work to automation, the experience is always <code>doc-code</code>.",stepOne:"01 / define",stepOneTitle:"Declare the project policy",stepOneText:"Configure once how the project selects, writes, and applies documentation.",stepTwo:"02 / version",stepTwoTitle:"Share the standard",stepTwoText:"The same file travels with the repository and removes repeated decisions on every machine.",stepThree:"03 / run",stepThreeTitle:"Run without thinking about flags",stepThreeText:"The tool does exactly what the project's configuration dictates.",quickTitle:"Configure today.<br>Simplify every day.",quickText:"Install, create the configuration file, and put the project's preferences there. From then on, consistent documentation fits in one command."});
+      const picker=document.querySelector('#language-picker');const nodes=[...document.querySelectorAll('[data-i18n]')];nodes.forEach(n=>n.dataset.pt=n.innerHTML);
+      function setLanguage(language){const dictionary=translations[language]||{};nodes.forEach(n=>n.innerHTML=language==='pt-BR'?n.dataset.pt:(dictionary[n.dataset.i18n]||n.dataset.pt));document.documentElement.lang=language;document.title=language==='en'?'Doc Code — clear documentation, preserved code':'Doc Code — documentação clara, código preservado';localStorage.setItem('doc-code-language',language)}
+      const saved=localStorage.getItem('doc-code-language');const initial=saved||(navigator.language.toLowerCase().startsWith('pt')?'pt-BR':'en');picker.value=initial;setLanguage(initial);picker.addEventListener('change',event=>setLanguage(event.target.value));
+    </script>
+  </body>
+</html>
