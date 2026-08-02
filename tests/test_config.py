@@ -158,10 +158,20 @@ def test_minimal_coverage_targets_only_the_public_top_level_api() -> None:
     selected = [
         symbol.name
         for symbol in symbols
-        if needs_documentation(symbol, "minimal", "preserve")
+        if needs_documentation(symbol, "minimal")
     ]
 
     assert selected == ["module", "public", "Service"]
+
+
+def test_existing_docs_is_not_a_supported_configuration_option(tmp_path: Path) -> None:
+    """Verify the removed option is rejected instead of silently changing behavior."""
+    (tmp_path / ".doc-code.toml").write_text(
+        "[documentation]\nexisting_docs = 'preserve'\n", encoding="utf-8"
+    )
+
+    with pytest.raises(DocGubError, match=r"Unknown option\(s\).*existing_docs"):
+        load(tmp_path)
 
 
 def test_structured_ai_response_requires_argument_documentation() -> None:
