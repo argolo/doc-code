@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from doc_code import cli
 from doc_code.cli import _loading, _model_for_attempt, _undocumented_symbols
 from doc_code.config import Settings
+from doc_code.editor import PreparedFile
 from doc_code.errors import AIProviderError, AITimeoutError, DocGubError, NoEligibleFilesError
 from doc_code.symbols import Documentation, Symbol, discover, source_for_symbol
 
@@ -205,7 +206,7 @@ def test_apply_writes_each_file_before_later_generation_failures(
 
     monkeypatch.setattr(cli, "documentation_for", fake_documentation)
 
-    result = CliRunner().invoke(cli.app, ["first.py", "second.py"])
+    result = CliRunner().invoke(cli.app, ["--yes", "first.py", "second.py"])
 
     assert result.exit_code == 1, result.output
     assert '"""Generated docs."""' in first.read_text(encoding="utf-8")
@@ -289,10 +290,10 @@ def test_symbol_request_scope_calls_the_model_once_per_target(
 
 
 @pytest.mark.parametrize("request_scope", ["file", "symbol"])
-def test_preserve_skips_documented_symbols_for_every_request_scope(
+def test_missing_coverage_skips_documented_symbols_for_every_request_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request_scope: str
 ) -> None:
-    """Verify preserve skips documented symbols for every request scope."""
+    """Verify missing coverage skips documented symbols for every request scope."""
     source = (
         '"""Module docs."""\n\n'
         "class DocumentedClass:\n"
@@ -319,8 +320,7 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
     received: list[list[str]] = []
     settings = Settings(
         confirm=False,
-        coverage="all",
-        existing_docs="preserve",
+        coverage="missing",
         request_scope=request_scope,
         models=("test",),
     )
@@ -336,7 +336,7 @@ def test_preserve_skips_documented_symbols_for_every_request_scope(
 
     monkeypatch.setattr(cli, "documentation_for", fake_documentation)
 
-    result = CliRunner().invoke(cli.app, ["sample.py"])
+    result = CliRunner().invoke(cli.app, ["--yes", "sample.py"])
 
     assert result.exit_code == 0, result.output
     assert received == [["missing_function"]]
@@ -371,7 +371,7 @@ def test_symbol_scope_applies_completed_symbols_before_a_later_failure(
 
     monkeypatch.setattr(cli, "documentation_for", fake_documentation)
 
-    result = CliRunner().invoke(cli.app, ["sample.py"])
+    result = CliRunner().invoke(cli.app, ["--yes", "sample.py"])
 
     assert result.exit_code == 1, result.output
     assert '"""First generated documentation."""' in path.read_text(encoding="utf-8")
@@ -413,7 +413,7 @@ def test_symbol_scope_applies_every_duplicate_symbol_incrementally(
         },
     )
 
-    result = CliRunner().invoke(cli.app, ["duplicate.py"])
+    result = CliRunner().invoke(cli.app, ["--yes", "duplicate.py"])
 
     assert result.exit_code == 0, result.output
     updated = path.read_text(encoding="utf-8")
@@ -535,7 +535,7 @@ def test_symbol_scope_applies_class_docs_before_a_decorated_method(
         lambda _content, symbols, _settings: {symbols[0].name: "Perform financial calculations."},
     )
 
-    result = CliRunner().invoke(cli.app, ["finance.py"])
+    result = CliRunner().invoke(cli.app, ["--yes", "finance.py"])
 
     assert result.exit_code == 0, result.output
     updated = path.read_text(encoding="utf-8")
@@ -548,14 +548,162 @@ def test_symbol_scope_applies_class_docs_before_a_decorated_method(
     assert "invalid syntax" not in result.output
 
 
-def test_noninteractive_apply_requires_explicit_confirmation(
+def test_noninteractive_docstring_review_requires_explicit_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify noninteractive apply requires explicit confirmation."""
+    """Verify noninteractive docstring review requires explicit confirmation."""
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
 
     with pytest.raises(DocGubError, match="use --yes"):
-        cli._confirm_application(Settings(output="apply"), ["sample.py"], yes=False)
+        cli._require_interactive_confirmation(Settings(output="apply"), yes=False)
+
+
+@pytest.mark.parametrize("request_scope", ["file", "symbol"])
+def test_confirm_true_reviews_each_docstring_and_skips_declined_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request_scope: str
+) -> None:
+    """Verify each generated docstring is reviewed independently before application."""
+    path = tmp_path / "sample.py"
+    path.write_text(
+        '"""Module docs."""\n\ndef first():\n    pass\n\ndef second():\n    pass\n',
+        encoding="utf-8",
+    )
+
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    settings = Settings(output="apply", confirm=True, request_scope=request_scope, models=("test",))
+    reviewed: list[tuple[str, str, str]] = []
+    decisions = iter([True, False])
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["sample.py"])
+    monkeypatch.setattr(cli, "_require_interactive_confirmation", lambda *_args: None)
+    monkeypatch.setattr(
+        cli,
+        "documentation_for",
+        lambda _source, symbols, _settings: {
+            symbol.name: Documentation(f"Document {symbol.name}.") for symbol in symbols
+        },
+    )
+
+    def confirm(relative: str, symbol: Symbol, documentation: str) -> bool:
+        """Record the rendered proposal and select its outcome."""
+        reviewed.append((relative, symbol.name, documentation))
+        return next(decisions)
+
+    monkeypatch.setattr(cli, "_confirm_generated_docstring", confirm)
+
+    result = CliRunner().invoke(cli.app, ["sample.py"])
+
+    assert result.exit_code == 0, result.output
+    assert [(relative, name) for relative, name, _ in reviewed] == [
+        ("sample.py", "first"),
+        ("sample.py", "second"),
+    ]
+    assert reviewed[0][2] == '    """Document first."""'
+    updated = path.read_text(encoding="utf-8")
+    assert '"""Document first."""' in updated
+    assert '"""Document second."""' not in updated
+
+
+def test_yes_bypasses_docstring_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify --yes applies generated docs without invoking the review prompt."""
+    path = tmp_path / "sample.py"
+    path.write_text("def sample():\n    pass\n", encoding="utf-8")
+
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    settings = Settings(output="apply", confirm=True, models=("test",))
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["sample.py"])
+    monkeypatch.setattr(
+        cli,
+        "documentation_for",
+        lambda _source, symbols, _settings: {
+            symbol.name: Documentation("Generated docs.") for symbol in symbols
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_confirm_generated_docstring",
+        lambda *_args: pytest.fail("--yes must not request docstring confirmation"),
+    )
+
+    result = CliRunner().invoke(cli.app, ["--yes", "sample.py"])
+
+    assert result.exit_code == 0, result.output
+    assert '"""Generated docs."""' in path.read_text(encoding="utf-8")
+
+
+def test_declined_docstring_is_reported(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Verify a declined docstring is signalled before processing continues."""
+    symbol = Symbol("sample", "function", 1, 1, "")
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.typer, "confirm", lambda *_args, **_kwargs: False)
+
+    assert not cli._confirm_generated_docstring("sample.py", symbol, '"""Generated docs."""')
+
+    output = capsys.readouterr().out
+    assert "sample.py:sample" in output
+    assert '"""Generated docs."""' in output
+    assert "Not applied: sample.py:sample" in output
+
+
+@pytest.mark.parametrize("applied", [False, True])
+def test_confirm_false_reviews_generated_changes_before_applying(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, applied: bool
+) -> None:
+    """Verify post-generation confirmation displays a diff before changing a file."""
+    path = tmp_path / "sample.py"
+    source = "def sample():\n    return True\n"
+    path.write_text(source, encoding="utf-8")
+
+    class Repo:
+        """Provide a repository test double."""
+
+        def __init__(self) -> None:
+            """Initialize the test double."""
+            self.root = tmp_path
+
+    settings = Settings(output="apply", confirm=False, request_scope="symbol", models=("test",))
+    monkeypatch.setattr(cli, "GitRepo", Repo)
+    monkeypatch.setattr(cli, "load", lambda *_args, **_kwargs: settings)
+    monkeypatch.setattr(cli, "resolve", lambda *_args: ["sample.py"])
+    monkeypatch.setattr(cli, "documentation_for", lambda *_args: {"sample": "Generated docs."})
+    reviewed: list[PreparedFile] = []
+
+    def confirm(item: PreparedFile) -> bool:
+        """Record the generated diff presented for confirmation."""
+        reviewed.append(item)
+        return applied
+
+    monkeypatch.setattr(cli, "_confirm_generated_file", confirm)
+
+    result = CliRunner().invoke(cli.app, ["sample.py"])
+
+    assert result.exit_code == 0, result.output
+    assert "+++ b/sample.py" in result.output
+    assert len(reviewed) == 1
+    assert reviewed[0].diff
+    if applied:
+        assert '"""Generated docs."""' in path.read_text(encoding="utf-8")
+    else:
+        assert path.read_text(encoding="utf-8") == source
 
 
 def test_request_retries_with_the_next_model_after_a_timeout(
@@ -638,7 +786,9 @@ def test_config_init_uses_the_doc_code_default_filename(
     result = CliRunner().invoke(cli.config_app, ["init"])
 
     assert result.exit_code == 0, result.output
-    assert (tmp_path / ".doc-code.toml").is_file()
+    config = tmp_path / ".doc-code.toml"
+    assert config.is_file()
+    assert "existing_docs" not in config.read_text(encoding="utf-8")
 
 
 def test_generation_reports_source_read_errors(
