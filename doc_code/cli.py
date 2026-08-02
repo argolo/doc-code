@@ -14,7 +14,14 @@ import typer
 
 from .ai import documentation_for
 from .config import TEMPLATE, Settings, load
-from .editor import PreparedFile, apply, can_insert_documentation, prepare, validation_command
+from .editor import (
+    PreparedFile,
+    apply,
+    can_insert_documentation,
+    prepare,
+    preview_documentation,
+    validation_command,
+)
 from .errors import (
     AIProviderError,
     AITimeoutError,
@@ -175,19 +182,41 @@ def _run_check(repo: GitRepo, files: list[str]) -> None:
     raise typer.Exit(1)
 
 
-def _confirm_application(settings: Settings, files: list[str], yes: bool) -> bool:
-    """Request one global confirmation before incremental application."""
+def _require_interactive_confirmation(settings: Settings, yes: bool) -> None:
+    """Ensure per-docstring confirmation can be requested before generating output."""
     if settings.output != "apply" or not settings.confirm or yes:
-        return True
+        return
     if not sys.stdin.isatty():
         raise DocGubError(
             "Confirmation requires an interactive terminal; use --yes for automation."
         )
-    confirmed = typer.confirm(
-        f"Apply documentation as each of {len(files)} file(s) completes?", default=False
-    )
+
+
+def _confirm_generated_docstring(relative: str, symbol: Symbol, documentation: str) -> bool:
+    """Show one rendered docstring and ask whether it should be written."""
+    if not sys.stdin.isatty():
+        raise DocGubError(
+            "Confirmation requires an interactive terminal; use --yes for automation."
+        )
+    typer.echo()
+    typer.secho(f"{relative}:{symbol.name}", fg=typer.colors.CYAN, bold=True)
+    typer.echo(documentation)
+    confirmed = typer.confirm("Apply this docstring?", default=False)
     if not confirmed:
-        typer.secho("Cancelled.", fg=typer.colors.YELLOW)
+        typer.secho(f"Not applied: {relative}:{symbol.name}", fg=typer.colors.YELLOW)
+    return confirmed
+
+
+def _confirm_generated_file(item: PreparedFile) -> bool:
+    """Confirm a displayed generated diff immediately before applying it."""
+    if not sys.stdin.isatty():
+        raise DocGubError(
+            "Confirmation requires an interactive terminal; use --yes for automation."
+        )
+    relative = (item.display_path or item.path).as_posix()
+    confirmed = typer.confirm(f"Apply the generated documentation to {relative}?", default=False)
+    if not confirmed:
+        typer.secho(f"Not applied: {relative}", fg=typer.colors.YELLOW)
     return confirmed
 
 
@@ -247,6 +276,7 @@ def _apply_generated_symbol(
     generated: dict[str, Documentation],
     settings: Settings,
     occurrence: int | None = None,
+    confirm: bool = False,
 ) -> bool:
     """Apply one generated symbol against a freshly discovered source tree."""
     current_symbols = discover(_read_source(file_path), file_path.suffix, relative)
@@ -271,6 +301,16 @@ def _apply_generated_symbol(
     documentation = generated.get(target.name)
     if documentation is None:
         raise DocGubError(f"{relative}: missing generated documentation for `{target.name}`.")
+    if confirm:
+        preview = preview_documentation(
+            file_path,
+            _read_source(file_path),
+            current_target,
+            documentation,
+            settings,
+        )
+        if not _confirm_generated_docstring(relative, current_target, preview):
+            return False
     item = prepare(
         file_path,
         current_symbols,
@@ -292,8 +332,10 @@ def _generate_for_file(
     targets: list[Symbol],
     settings: Settings,
     state: _RunState,
+    apply_incrementally: bool,
+    confirm_each_docstring: bool,
 ) -> tuple[dict[str, Documentation], str]:
-    """Generate every request for one file, applying symbol-scoped results incrementally."""
+    """Generate every request for one file and optionally apply symbols incrementally."""
     requests = _request_batches(content, targets, file_path, relative, settings)
     descriptions: dict[str, Documentation] = {}
     candidate = settings.model
@@ -303,7 +345,11 @@ def _generate_for_file(
             label = f"{number}/{len(requests)} {relative}:{requested_symbols[0].name}"
         generated, candidate = _request_documentation(source, requested_symbols, settings, label)
         descriptions.update(generated)
-        if settings.request_scope == "symbol" and settings.output == "apply":
+        if (
+            apply_incrementally
+            and settings.request_scope == "symbol"
+            and settings.output == "apply"
+        ):
             if _apply_generated_symbol(
                 file_path,
                 relative,
@@ -311,9 +357,33 @@ def _generate_for_file(
                 generated,
                 settings,
                 _symbol_occurrence(targets, requested_symbols[0]),
+                confirm=confirm_each_docstring,
             ):
                 state.mark_completed(relative)
     return descriptions, candidate
+
+
+def _apply_reviewed_docstrings(
+    file_path: Path,
+    relative: str,
+    targets: list[Symbol],
+    descriptions: dict[str, Documentation],
+    settings: Settings,
+    state: _RunState,
+) -> None:
+    """Review and apply generated docstrings one at a time for a file-scoped request."""
+    for target in targets:
+        if _apply_generated_symbol(
+            file_path,
+            relative,
+            target,
+            descriptions,
+            settings,
+            _symbol_occurrence(targets, target),
+            confirm=True,
+        ):
+            state.mark_completed(relative)
+            typer.secho(f"Applied documentation: {relative}:{target.name}", fg=typer.colors.GREEN)
 
 
 def _process_file(
@@ -322,6 +392,7 @@ def _process_file(
     settings: Settings,
     show_diff: bool,
     state: _RunState,
+    yes: bool,
 ) -> None:
     """Discover, generate, validate, and optionally apply documentation for one file."""
     file_path = repo.root / relative
@@ -335,25 +406,48 @@ def _process_file(
     targets = [
         symbol
         for symbol in symbols
-        if needs_documentation(symbol, settings.coverage, settings.existing_docs)
+        if needs_documentation(symbol, settings.coverage)
         and can_insert_documentation(content, symbol, file_path.suffix)
     ]
     if not targets:
         item = prepare(file_path, symbols, {}, settings, display_path=Path(relative))
         _show(item, "not used", 0, settings.output == "preview" and show_diff)
         return
+    confirm_after_generation = settings.output == "apply" and not settings.confirm and not yes
+    confirm_each_docstring = settings.output == "apply" and settings.confirm and not yes
     started = perf_counter()
     try:
         if file_path.suffix != ".py":
             validation_command(file_path.suffix, file_path)
         descriptions, candidate = _generate_for_file(
-            file_path, relative, content, targets, settings, state
+            file_path,
+            relative,
+            content,
+            targets,
+            settings,
+            state,
+            apply_incrementally=not confirm_after_generation,
+            confirm_each_docstring=confirm_each_docstring,
         )
-        if settings.request_scope == "symbol" and settings.output == "apply":
+        if (
+            settings.request_scope == "symbol"
+            and settings.output == "apply"
+            and not confirm_after_generation
+        ):
+            return
+        if settings.output == "apply" and confirm_each_docstring:
+            _apply_reviewed_docstrings(file_path, relative, targets, descriptions, settings, state)
             return
         item = prepare(file_path, symbols, descriptions, settings, display_path=Path(relative))
-        _show(item, candidate, perf_counter() - started, settings.output == "preview" and show_diff)
+        _show(
+            item,
+            candidate,
+            perf_counter() - started,
+            (settings.output == "preview" and show_diff) or confirm_after_generation,
+        )
         if settings.output == "apply" and item.diff:
+            if confirm_after_generation and not _confirm_generated_file(item):
+                return
             apply(item)
             state.mark_completed(relative)
             typer.secho(f"Applied documentation: {relative}", fg=typer.colors.GREEN)
@@ -399,9 +493,10 @@ def doc_code(
         "--show-diff/--no-show-diff",
         help="Show generated unified diffs in preview mode.",
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip global confirmation when applying."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip interactive confirmation when applying."
+    ),
     coverage: str | None = typer.Option(None, "--coverage", help="missing, minimal, or all."),
-    existing_docs: str | None = typer.Option(None, "--existing-docs", help="preserve or replace."),
     request_scope: str | None = typer.Option(
         None,
         "--request-scope",
@@ -429,7 +524,6 @@ def doc_code(
             config,
             output="preview" if dry_run or check else output,
             coverage=coverage,
-            existing_docs=existing_docs,
             request_scope=request_scope,
             language=language,
             selection=selection,
@@ -455,11 +549,10 @@ def doc_code(
         if check:
             _run_check(repo, files)
             return
-        if not _confirm_application(settings, files, yes):
-            return
+        _require_interactive_confirmation(settings, yes)
         state = _RunState([], [])
         for relative in files:
-            _process_file(repo, relative, settings, show_diff, state)
+            _process_file(repo, relative, settings, show_diff, state, yes)
         _finish_run(settings, state, continue_on_error)
     except (DocGubError, UnicodeDecodeError, SyntaxError) as exc:
         message = _syntax_error_message(exc) if isinstance(exc, SyntaxError) else str(exc)
