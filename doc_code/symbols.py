@@ -358,14 +358,9 @@ def eligible(symbol: Symbol, coverage: str) -> bool:
     return not symbol.has_doc
 
 
-def needs_documentation(symbol: Symbol, coverage: str, existing_docs: str) -> bool:
-    """Return whether a symbol is eligible and may have its docs generated.
-
-    Existing documentation is never sent to a provider when ``existing_docs`` is ``"preserve"``.
-    This rule is independent of request scope: a scope only changes the source sent with a request,
-    not which symbols are candidates.
-    """
-    return eligible(symbol, coverage) and (not symbol.has_doc or existing_docs == "replace")
+def needs_documentation(symbol: Symbol, coverage: str) -> bool:
+    """Return whether a symbol is eligible under the selected coverage policy."""
+    return eligible(symbol, coverage)
 
 
 def source_for_symbol(
