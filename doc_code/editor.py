@@ -314,7 +314,7 @@ def _selected_symbols(
     return [
         symbol
         for symbol in symbols
-        if needs_documentation(symbol, settings.coverage, settings.existing_docs)
+        if needs_documentation(symbol, settings.coverage)
         and symbol.name in descriptions
     ]
 
@@ -345,12 +345,7 @@ def _insert_documentation(
     rendered = [
         f"{indentation}{row}{newline}" if row else newline for row in documentation.splitlines()
     ]
-    if (
-        symbol.has_doc
-        and settings.existing_docs == "replace"
-        and symbol.doc_start
-        and symbol.doc_end
-    ):
+    if symbol.has_doc and symbol.doc_start and symbol.doc_end:
         _pep257_separator(rendered, lines, symbol.doc_end, symbol, path.suffix, newline)
         lines[symbol.doc_start - 1 : symbol.doc_end] = rendered
         return True
@@ -365,6 +360,28 @@ def _insert_documentation(
     _pep257_separator(rendered, lines, insertion, symbol, path.suffix, newline)
     lines[insertion:insertion] = rendered
     return True
+
+
+def preview_documentation(
+    path: Path,
+    content: str,
+    symbol: Symbol,
+    documentation: str | Documentation,
+    settings: Settings,
+) -> str:
+    """Render one docstring exactly as it will appear in the source file."""
+    lines = content.splitlines(keepends=True)
+    line_length, python_format = _rendering_options(path, settings)
+    indentation = _documentation_indent(lines, symbol, path.suffix)
+    rendered = render(
+        symbol,
+        documentation,
+        path.suffix,
+        python_format,
+        line_length,
+        indentation,
+    )
+    return "\n".join(f"{indentation}{row}" if row else "" for row in rendered.splitlines())
 
 
 def _validate_edit(before: str, after: str, path: Path) -> None:
